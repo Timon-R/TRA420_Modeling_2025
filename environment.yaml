@@ -1,0 +1,17 @@
+name: tra420-modeling
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - pip
+  # Core numerical stack (fill in as modules are implemented)
+  - numpy
+  - pandas
+  - scipy
+  # Visualization & UI (adjust when GUI tech is chosen)
+  - matplotlib
+  - pip:
+      # Placeholder for GUI libraries (e.g., streamlit, dash)
+      - streamlit
+      # Add any pip-only dependencies here
