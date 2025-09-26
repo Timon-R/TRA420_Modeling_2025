@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python
+  - python=3.11
   - pip
   # Core numerical stack (fill in as modules are implemented)
   - numpy
@@ -14,4 +14,6 @@ dependencies:
   - pip:
       # Placeholder for GUI libraries (e.g., streamlit, dash)
       - streamlit
-      # Add any pip-only dependencies here
+      # Ruff & developer tooling
+      - ruff==0.6.9
+      - pre-commit

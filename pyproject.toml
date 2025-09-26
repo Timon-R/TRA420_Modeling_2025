@@ -1,0 +1,25 @@
+[project]
+name = "tra420-modeling"
+version = "0.1.0"
+description = "Pipeline for TRA420 energy-emissions-climate modeling"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["build", "dist", "*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E203", "W503"]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
