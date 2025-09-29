@@ -4,10 +4,10 @@ A checklist of tasks, features, and improvements for this project.
 
 ## General Todos:
 - [ ] List of parameters for interface group
-- [ ] 33% Progress report _(due: 2025-10-06)
+- [ ] 33% Progress report _(due: 2025-10-06)_
 
 ## Emissions:
-- [ ] Look through NEPCs of West Balkans _(Max, Elias)
+- [ ] Look through NEPCs of West Balkans _(Max, Elias)_
 
 ## Climate emulator:
 - [ ] Insert Todo here
