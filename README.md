@@ -8,55 +8,38 @@ temperature responses, and evaluating local/global impact metrics such as the So
 ## Repository Structure
 
 - `src/`
-  - `calc_emissions.py` — placeholder for the emission-factor based calculations.
-  - `FaIR.py` — placeholder for climate response routines (e.g., linking emissions to temperature).
-  - _(planned)_ `energy/`, `emissions/`, `climate/`, `impacts/`, `ui/`, `common/` packages or scripts that will
-    divide the end-to-end workflow into focused modules.
+  - `climate_module/` — FaIR wrappers and scenario tools.
+  - `calc_emissions/`- Converting electricity demand and mix into emission difference from baseline
+  - *(planned)* `impacts/`, `ui/`, `common/` packages that
+    will divide the workflow into focused modules as they are implemented.
+- `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
 - `data/` — input datasets (raw and processed). Keep large files out of version control when possible.
+- `resources/` — emission-difference inputs (e.g. `<scenario>_emission_difference.csv`); used by the climate runner and ignored by Git.
+- `results/` — generated outputs like climate CSVs (ignored by Git).
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
 - `pyproject.toml` — project metadata plus Ruff lint/format configuration.
-- `.pre-commit-config.yaml` — Git pre-commit hooks for automatic linting/formatting.
+- `.gitignore` — excludes generated results and other artifacts.
 - `README.md` — usage guidance and development conventions.
 
 ## Getting Started
 
 1. **Create the environment**
+
    ```bash
    mamba env create -f environment.yaml  # or `conda` / `uv` once finalized
    conda activate tra420-modeling
    ```
-2. **Install the project in editable mode** (once package metadata is finalized):
+
+1. **Install the project in editable mode** (once package metadata is finalized):
+
    ```bash
    pip install -e .
    ```
-3. **Configure data sources** by updating `config.yaml` with pointers to demand datasets, elasticity
-   assumptions, and emission-factor catalogues.
-
-## Ruff Linting & Formatting
-
-- Ruff is configured in `pyproject.toml` to handle both linting and code formatting.
-- Install the Git hooks once per clone to enable automatic fixes:
-  ```bash
-  pre-commit install
-  ```
-- Run Ruff manually when needed:
-  ```bash
-  ruff check src tests --fix --unsafe-fixes
-  ruff format src tests
-  ```
-- `pre-commit run -a` will apply the same checks to the whole repository (useful before opening a PR).
 
 ## Running the Pipeline
 
-Implementation is in progress. Planned modules include:
-- Energy mix calculation in `src/energy/` accepting demand trajectories plus elasticity settings.
-- Emission estimation in `src/emissions/` leveraging shared emission-factor catalogues.
-- Climate response modeling in `src/climate/` (FaIR or similar).
-- Impact metrics in `src/impacts/`, covering SCC and other damage metrics.
-- GUI elements in `src/ui/` exposing configurable parameters for scenario exploration.
-
-Until the modules are populated, prototype the workflow via simple CLI scripts under `scripts/`.
+Implementation is in progress.
 
 ## Development Guidelines
 
@@ -72,7 +55,37 @@ Until the modules are populated, prototype the workflow via simple CLI scripts u
 ## Contribution Workflow
 
 1. Create a feature branch (e.g., `feature/energy-mix`).
-2. Implement changes with tests, documentation updates, and Ruff-clean code.
-3. Run `pre-commit run -a` (or at least `ruff check`/`ruff format`) before committing.
-4. Open a pull request summarizing scientific assumptions and validation steps.
+1. Implement changes with tests, documentation updates, and Ruff-clean code.
+1. Run `pre-commit run -a` (or at least `ruff check`/`ruff format`) before committing.
+1. Open a pull request summarizing scientific assumptions and validation steps.
 
+## Coding Guidelines
+
+- Put reusable library code under `src/` (e.g. `src/climate_module/`). Modules here should expose functions/classes without side effects so they can be imported from notebooks, other scripts, or tests.
+- Place runnable entry points or one-off helpers under `scripts/`. These are thin wrappers that import from `src/`, read configuration (like `config.yaml`), and orchestrate the workflow.
+- Use `resources/` for intermediate inputs (such as `<scenario>_emission_difference.csv` files) that feed the climate runner. This folder is ignored by Git so you can generate or edit CSVs without polluting commits.
+
+## Ruff Linting & Formatting
+
+- Ruff is configured in `pyproject.toml` to handle both linting and code formatting.
+
+- Install the Git hooks once per clone to enable automatic fixes:
+
+  ```bash
+  pre-commit install
+  ```
+
+- Run Ruff manually when needed:
+
+  ```bash
+  ruff check . --fix
+  ruff format .
+  ```
+
+- For more comprehensive checks including unsafe fixes:
+
+  ```bash
+  ruff check . --fix --unsafe-fixes
+  ```
+
+- `pre-commit run -a` will apply the same checks to the whole repository (useful before opening a PR).
