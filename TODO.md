@@ -2,23 +2,31 @@
 
 A checklist of tasks, features, and improvements for this project.
 
-## General Todos:
+## General Todos
+
 - [ ] List of parameters for interface group
 - [ ] 33% Progress report _(due: 2025-10-06)_
 
-## Emissions:
+## Emissions
+
 - [ ] Look through NEPCs of West Balkans _(Max, Elias)_
 
-## Climate emulator:
-- [ ] Insert Todo here
+## Climate emulator
+
+- [x] build configurable climate module that converts emission difference into global temperature change
+- [ ] add pattern scaling functionality
+- [ ] add extreme weather functionality
 
 ## Pattern scaling
+
 - [ ] Insert Todo here
 
 ## Damage function
+
 - [ ] Insert Todo here
 
 ## Air pollution
+
 - [ ] Insert Todo here
 
 ## 🚀 Features
