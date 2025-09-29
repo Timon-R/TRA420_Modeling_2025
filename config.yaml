@@ -1,0 +1,36 @@
+climate_module:
+  output_directory: results/climate
+  # Sampling option for CSV outputs: 'default' (5-year steps to 2050, then 10-year) or 'full' (every year 2025-2100).
+  sample_years_option: default
+  # Folder containing <scenario>_emission_difference.csv files (delta in GtCO2/yr; negative values reduce emissions).
+  emission_timeseries_directory: resources
+
+  parameters:
+    # Simulation time grid (extend end_year for far-future projections).
+    start_year: 1750
+    end_year: 2100
+    timestep: 1.0  # Years per step; 1.0 = annual, 0.25 = quarterly (slower).
+
+    # Climate configuration presets and overrides.
+    climate_setup: ar6  # Options include 'ar6' (default three-layer) and 'two_box'.
+    deep_ocean_efficacy: 1.28  # Typical range 0.5–1.5 (higher slows deep-ocean uptake).
+    forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.
+    equilibrium_climate_sensitivity: 3.0  # °C per CO₂ doubling; likely range 2.0–5.0.
+
+  climate_scenarios:
+    # Choose which FaIR SSP pathways to evaluate (use 'all' or list of IDs).
+    run: all
+    definitions:
+      - id: ssp119  # Strong mitigation SSP (aggressive climate action)
+        label: ssp119
+        adjustment_specie: CO2 FFI
+      - id: ssp245  # Middle-of-the-road SSP (common reference case)
+        label: ssp245
+        adjustment_specie: CO2 FFI
+      - id: ssp370  # Higher-emission SSP (limited mitigation)
+        label: ssp370
+        adjustment_specie: CO2 FFI
+
+  emission_scenarios:
+    # Emission scenarios to load from <scenario>_emission_difference.csv (use 'all' or list).
+    run: all

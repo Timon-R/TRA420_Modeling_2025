@@ -12,8 +12,8 @@ src = ["src", "tests"]
 extend-exclude = ["build", "dist", "*.ipynb"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = ["E203", "W503"]
+select = ["E", "F", "I", "B", "SIM"]
+ignore = ["E203"]
 
 [tool.ruff.format]
 docstring-code-format = true
