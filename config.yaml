@@ -1,30 +1,137 @@
+calc_emissions:
+  emission_factors_file: data/emission_factors.csv
+  output_directory: resources
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+  demand_scenarios:
+    oecd_low:
+      description: OECD low demand case (TWh).
+      values:
+        2025: 900
+        2030: 915
+        2040: 940
+        2050: 965
+        2060: 985
+        2070: 1000
+        2080: 1015
+        2090: 1030
+        2100: 1045
+    oecd_baseline:
+      description: OECD baseline demand case (TWh).
+      values:
+        2025: 950
+        2030: 980
+        2040: 1020
+        2050: 1060
+        2060: 1100
+        2070: 1130
+        2080: 1160
+        2090: 1185
+        2100: 1210
+    oecd_high:
+      description: OECD high demand case (TWh).
+      values:
+        2025: 1000
+        2030: 1050
+        2040: 1110
+        2050: 1180
+        2060: 1240
+        2070: 1300
+        2080: 1360
+        2090: 1410
+        2100: 1460
+  mix_scenarios:
+    reference:
+      description: Balanced mix with gradual decarbonisation.
+      shares:
+        coal: 0.25
+        gas: 0.30
+        nuclear: 0.12
+        hydro: 0.10
+        wind: 0.10
+        solar: 0.08
+        biomass: 0.05
+    renewables_push:
+      description: Accelerated deployment of wind and solar.
+      shares:
+        coal: 0.10
+        gas: 0.18
+        nuclear: 0.12
+        hydro: 0.12
+        wind: 0.22
+        solar: 0.20
+        biomass: 0.06
+    fossil_lockin:
+      description: Slower transition away from fossil generation.
+      shares:
+        coal: 0.40
+        gas: 0.35
+        nuclear: 0.07
+        hydro: 0.08
+        wind: 0.05
+        solar: 0.03
+        biomass: 0.02
+  baseline:
+    demand_scenario: oecd_baseline
+    mix_scenario: reference
+  scenarios:
+    - name: energy_mix_A
+      demand_scenario: oecd_high
+      mix_scenario: renewables_push
+    - name: energy_mix_B
+      demand_scenario: oecd_low
+      mix_scenario: fossil_lockin
+    - name: custom_example
+      demand_custom:
+        2025: 960
+        2030: 990
+        2040: 1050
+        2050: 1100
+        2060: 1140
+        2070: 1180
+        2080: 1210
+        2090: 1240
+        2100: 1270
+      mix_custom:
+        shares:
+          coal: 0.15
+          gas: 0.25
+          nuclear: 0.15
+          hydro: 0.12
+          wind: 0.15
+          solar: 0.12
+          biomass: 0.06
+
 climate_module:
+  # Directory for climate results (relative to repository root).
   output_directory: results/climate
-  # Sampling option for CSV outputs: 'default' (5-year steps to 2050, then 10-year) or 'full' (every year 2025-2100).
+  # Sampling option for CSV outputs: 'default' (5-year steps to 2050, then 10-year) or 'full'.
   sample_years_option: default
-  # Folder containing <scenario>_emission_difference.csv files (delta in GtCO2/yr; negative values reduce emissions).
+  # Folder containing <scenario>_emission_difference.csv files (delta in Mt CO₂/yr; negative reduces emissions).
   emission_timeseries_directory: resources
 
   parameters:
     # Simulation time grid (extend end_year for far-future projections).
     start_year: 1750
     end_year: 2100
-    timestep: 1.0  # Years per step; 1.0 = annual, 0.25 = quarterly (slower).
+    timestep: 1.0  # Years per step; 1.0 = annual, 0.25 = quarterly (slower runtime).
 
-    # Climate configuration presets and overrides.
+    # Climate presets and overrides (values applied to all configs unless overridden per scenario).
     climate_setup: ar6  # Options include 'ar6' (default three-layer) and 'two_box'.
-    deep_ocean_efficacy: 1.28  # Typical range 0.5–1.5 (higher slows deep-ocean uptake).
+    deep_ocean_efficacy: 1.28  # Plausible range 0.5–1.5 (higher slows deep-ocean uptake).
     forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.
     equilibrium_climate_sensitivity: 3.0  # °C per CO₂ doubling; likely range 2.0–5.0.
 
   climate_scenarios:
-    # Choose which FaIR SSP pathways to evaluate (use 'all' or list of IDs).
+    # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
     run: all
     definitions:
       - id: ssp119  # Strong mitigation SSP (aggressive climate action)
         label: ssp119
-        adjustment_specie: CO2 FFI
-      - id: ssp245  # Middle-of-the-road SSP (common reference case)
+        adjustment_specie: CO2 FFI  # Emission adjustments are specified in Mt CO₂/yr.
+      - id: ssp245  # Middle-of-the-road SSP (reference case)
         label: ssp245
         adjustment_specie: CO2 FFI
       - id: ssp370  # Higher-emission SSP (limited mitigation)
@@ -32,5 +139,5 @@ climate_module:
         adjustment_specie: CO2 FFI
 
   emission_scenarios:
-    # Emission scenarios to load from <scenario>_emission_difference.csv (use 'all' or list).
+    # Emission scenarios to load from <scenario>_emission_difference.csv (use 'all' or list of names).
     run: all

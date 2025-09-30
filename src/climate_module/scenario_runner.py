@@ -36,12 +36,12 @@ class ScenarioSpec:
     compute_kwargs: Mapping[str, object] | None = None
 
 
-def step_change(value: float, start_year: float) -> AdjustmentCallable:
-    """Return an adjustment that steps to ``value`` from ``start_year`` onward."""
+def step_change(value_mt: float, start_year: float) -> AdjustmentCallable:
+    """Return an adjustment that steps (in Mt CO₂) to ``value_mt`` from ``start_year`` onward."""
 
     def _builder(timepoints: np.ndarray, cfg: Mapping[str, float]) -> np.ndarray:
         threshold = start_year + cfg["timestep"] / 2
-        return np.where(timepoints >= threshold, value, 0.0)
+        return np.where(timepoints >= threshold, value_mt / 1000.0, 0.0)
 
     return _builder
 
@@ -98,7 +98,8 @@ def _prepare_adjustments(
         if callable(value):
             prepared[specie] = value(timepoints, cfg)
         else:
-            prepared[specie] = value
+            arr = np.asarray(value, dtype=float)
+            prepared[specie] = arr / 1000.0
     return prepared
 
 

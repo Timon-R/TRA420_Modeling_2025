@@ -14,7 +14,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
     will divide the workflow into focused modules as they are implemented.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
 - `data/` — input datasets (raw and processed). Keep large files out of version control when possible.
-- `resources/` — emission-difference inputs (e.g. `<scenario>_emission_difference.csv`); used by the climate runner and ignored by Git.
+- `resources/` — emission-difference inputs (e.g. `<scenario>_emission_difference.csv`, Mt CO₂/yr); used by the climate runner and ignored by Git.
 - `results/` — generated outputs like climate CSVs (ignored by Git).
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
@@ -89,3 +89,25 @@ Implementation is in progress.
   ```
 
 - `pre-commit run -a` will apply the same checks to the whole repository (useful before opening a PR).
+
+## Configuration Overview
+
+All runtime settings live in `config.yaml`.
+
+- `calc_emissions`
+  - Defines electricity demand/mix scenarios and converts them into Mt CO₂/yr deltas.
+  - Key subsections:
+    - `years`: simulation horizon (`start`, `end`, `step`).
+    - `demand_scenarios` / `mix_scenarios`: named templates used by `baseline` and entries in `scenarios`.
+    - `baseline`: reference demand + mix used to compute differences.
+    - `scenarios`: list of electricity cases. Each entry can reference a named scenario or supply `*_custom` mappings.
+    - Outputs `<scenario>_emission_difference.csv` in the configured directory (default `resources/`). Values are Mt CO₂ per year.
+
+- `climate_module`
+  - Consumes emission-difference files and runs FaIR temperature responses.
+  - Key options:
+    - `output_directory`: where summary CSVs are written (`results/climate` by default).
+    - `sample_years_option`: `default` (5-year to 2050, then 10-year) or `full` (every year 2025–2100).
+    - `parameters`: global FaIR settings; includes time grid (`start_year`, `end_year`, `timestep`) and climate overrides (`deep_ocean_efficacy`, `forcing_4co2`, `equilibrium_climate_sensitivity`).
+    - `climate_scenarios`: SSP pathways to run (use `run: all` or list of IDs) with per-pathway tweaks.
+    - `emission_scenarios`: which emission files in `resources/` to process (`all` or list of file stems).

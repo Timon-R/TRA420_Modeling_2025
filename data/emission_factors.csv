@@ -1,0 +1,10 @@
+technology,emission_factor_mt_per_twh
+coal,0.95
+gas,0.4
+nuclear,0.01
+hydro,0.005
+wind,0.004
+solar,0.02
+biomass,0.3
+geothermal,0.05
+storage,0.02

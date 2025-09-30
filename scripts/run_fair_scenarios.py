@@ -1,4 +1,4 @@
-"""Lightweight entry point for running FaIR temperature scenarios.
+"""Run FaIR temperature scenarios based on ``config.yaml``.
 
 Usage
 -----
@@ -6,19 +6,31 @@ Usage
 python scripts/run_fair_scenarios.py
 ```
 
-Configuration lives in ``config.yaml`` under the ``climate_module`` section. Place
-emission-difference CSVs in the directory specified by
-``emission_timeseries_directory`` (default: ``resources/``) and the script will run
-each file against the selected climate scenarios. Tweak climate parameters or
-scenario selection in the same config block—no code changes required.
+Configuration lives in ``config.yaml`` under the ``climate_module`` section:
+
+- ``emission_timeseries_directory`` – directory containing
+  ``<scenario>_emission_difference.csv`` files (values in Mt CO₂/yr) produced by
+  the ``calc_emissions`` workflow. The runner automatically detects every file in
+  that folder unless ``emission_scenarios.run`` restricts the list.
+- ``climate_scenarios`` – SSP pathways to evaluate (``run: all`` or explicit list).
+- ``parameters`` – global FaIR options (time grid, climate setup, overrides).
+- ``sample_years_option`` – determines which years are written to output CSVs.
+
+Output
+------
+For every combination of emission scenario and climate pathway the script writes a
+CSV to ``results/climate/<emission>_<climate>.csv`` and prints a summary table with
+2030, 2050 and 2100 temperatures/deltas.
 
 Emission time series
 --------------------
-If you want to prescribe a custom emission trajectory inside the config instead of
-using the detected CSV, pass an array with the same length (and ordering) as the
-FaIR timepoints returned by :func:`climate_module.compute_temperature_change`. A
-helper in :mod:`climate_module.scenario_runner` already prepares the timepoints
-for you, so a callable adjustment can look like this:
+Emission differences are expressed in **Mt CO₂ per year**. The runner converts them
+to Gt CO₂ before passing them to FaIR. If you want to prescribe a custom
+trajectory inside the config instead of using the detected CSV, pass an array with
+the same length (and ordering) as the FaIR timepoints returned by
+:func:`climate_module.compute_temperature_change`. A helper in
+:mod:`climate_module.scenario_runner` already prepares the timepoints for you, so a
+callable adjustment can look like this:
 
 >>> def custom_series(timepoints, cfg):
 ...     years = [2025.5, 2030.5, 2040.5]
@@ -247,7 +259,8 @@ def _timeseries_adjustment(rel_path: Path):
 
     def builder(timepoints: np.ndarray, cfg: dict[str, float]) -> np.ndarray:
         offset = cfg.get("timestep", 1.0) / 2
-        return np.interp(timepoints, years + offset, deltas, left=deltas[0], right=deltas[-1])
+        mt_values = np.interp(timepoints, years + offset, deltas, left=deltas[0], right=deltas[-1])
+        return mt_values / 1000.0
 
     return builder
 
