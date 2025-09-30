@@ -14,7 +14,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
     will divide the workflow into focused modules as they are implemented.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
 - `data/` — input datasets (raw and processed). Keep large files out of version control when possible.
-- `resources/` — emission-difference inputs (e.g. `<scenario>_emission_difference.csv`, Mt CO₂/yr); used by the climate runner and ignored by Git.
+- `resources/` — emission-difference scenario folders (e.g. `<scenario>/co2.csv`, Mt CO₂/yr); used by the climate runner and ignored by Git.
 - `results/` — generated outputs like climate CSVs (ignored by Git).
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
@@ -63,7 +63,7 @@ Implementation is in progress.
 
 - Put reusable library code under `src/` (e.g. `src/climate_module/`). Modules here should expose functions/classes without side effects so they can be imported from notebooks, other scripts, or tests.
 - Place runnable entry points or one-off helpers under `scripts/`. These are thin wrappers that import from `src/`, read configuration (like `config.yaml`), and orchestrate the workflow.
-- Use `resources/` for intermediate inputs (such as `<scenario>_emission_difference.csv` files) that feed the climate runner. This folder is ignored by Git so you can generate or edit CSVs without polluting commits.
+- Use `resources/` for intermediate inputs (each emission scenario has its own folder with `co2/so2/nox/pm25.csv`). This folder is ignored by Git so you can generate or edit CSVs without polluting commits.
 
 ## Ruff Linting & Formatting
 
@@ -98,10 +98,11 @@ All runtime settings live in `config.yaml`.
   - Defines electricity demand/mix scenarios and converts them into Mt CO₂/yr deltas.
   - Key subsections:
     - `years`: simulation horizon (`start`, `end`, `step`).
+    - `emission_factors_file`: CSV with technology factors (CO₂ in Mt/TWh; SO₂/NOₓ/PM₂.₅ in kt/TWh). The calculator converts non-CO₂ pollutants to Mt/year when writing outputs.
     - `demand_scenarios` / `mix_scenarios`: named templates used by `baseline` and entries in `scenarios`.
     - `baseline`: reference demand + mix used to compute differences.
     - `scenarios`: list of electricity cases. Each entry can reference a named scenario or supply `*_custom` mappings.
-    - Outputs `<scenario>_emission_difference.csv` in the configured directory (default `resources/`). Values are Mt CO₂ per year.
+    - Outputs one folder per scenario in the configured directory (default `resources/`). Files include `co2.csv`, `so2.csv`, `nox.csv`, `pm25.csv` with Mt/year deltas; the climate module consumes `co2.csv` while the others support air-pollution analysis.
 
 - `climate_module`
   - Consumes emission-difference files and runs FaIR temperature responses.
@@ -110,4 +111,4 @@ All runtime settings live in `config.yaml`.
     - `sample_years_option`: `default` (5-year to 2050, then 10-year) or `full` (every year 2025–2100).
     - `parameters`: global FaIR settings; includes time grid (`start_year`, `end_year`, `timestep`) and climate overrides (`deep_ocean_efficacy`, `forcing_4co2`, `equilibrium_climate_sensitivity`).
     - `climate_scenarios`: SSP pathways to run (use `run: all` or list of IDs) with per-pathway tweaks.
-    - `emission_scenarios`: which emission files in `resources/` to process (`all` or list of file stems).
+    - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only `co2.csv` feeds FaIR; other pollutant files are optional analytics inputs.

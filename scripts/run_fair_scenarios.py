@@ -8,10 +8,10 @@ python scripts/run_fair_scenarios.py
 
 Configuration lives in ``config.yaml`` under the ``climate_module`` section:
 
-- ``emission_timeseries_directory`` – directory containing
-  ``<scenario>_emission_difference.csv`` files (values in Mt CO₂/yr) produced by
-  the ``calc_emissions`` workflow. The runner automatically detects every file in
-  that folder unless ``emission_scenarios.run`` restricts the list.
+- ``emission_timeseries_directory`` – directory containing subfolders like
+  ``resources/<scenario>/co2.csv`` (values in Mt CO₂/yr) produced by the
+  ``calc_emissions`` workflow. The runner automatically detects each folder
+  unless ``emission_scenarios.run`` restricts the list.
 - ``climate_scenarios`` – SSP pathways to evaluate (``run: all`` or explicit list).
 - ``parameters`` – global FaIR options (time grid, climate setup, overrides).
 - ``sample_years_option`` – determines which years are written to output CSVs.
@@ -24,8 +24,7 @@ CSV to ``results/climate/<emission>_<climate>.csv`` and prints a summary table w
 
 Emission time series
 --------------------
-Emission differences are expressed in **Mt CO₂ per year**. The runner converts them
-to Gt CO₂ before passing them to FaIR. If you want to prescribe a custom
+Emission differences are expressed in **Mt CO₂ per year** (derived from the CSVs in `resources/`). The runner converts them to Gt CO₂ before passing them to FaIR. If you want to prescribe a custom
 trajectory inside the config instead of using the detected CSV, pass an array with
 the same length (and ordering) as the FaIR timepoints returned by
 :func:`climate_module.compute_temperature_change`. A helper in
@@ -116,8 +115,11 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 EMISSION_DIR = ROOT / CONFIG.get("emission_timeseries_directory", "resources")
 EMISSION_DIR.mkdir(parents=True, exist_ok=True)
-EMISSION_FILES = sorted(EMISSION_DIR.glob("*_emission_difference.csv"))
-EMISSION_MAP = {path.stem.replace("_emission_difference", ""): path for path in EMISSION_FILES}
+EMISSION_MAP = {
+    d.name: d
+    for d in sorted(EMISSION_DIR.iterdir())
+    if d.is_dir() and (d / "co2.csv").exists()
+}
 EMISSION_CFG = CONFIG.get("emission_scenarios", {})
 emission_run = EMISSION_CFG.get("run", "all") if isinstance(EMISSION_CFG, dict) else "all"
 if isinstance(emission_run, str) and emission_run.lower() == "all":
@@ -148,7 +150,10 @@ def build_scenarios() -> list[ScenarioSpec]:
 
     specs: list[ScenarioSpec] = []
     for emission_name in SELECTED_EMISSIONS:
-        emission_file = EMISSION_MAP[emission_name]
+        emission_dir = EMISSION_MAP[emission_name]
+        default_co2 = emission_dir / "co2.csv"
+        if not default_co2.exists():
+            raise FileNotFoundError(f"Missing co2.csv for emission scenario '{emission_name}' in {emission_dir}")
 
         for climate_id in SELECTED_CLIMATE_IDS:
             definition = CLIMATE_DEFS[climate_id]
@@ -160,7 +165,17 @@ def build_scenarios() -> list[ScenarioSpec]:
             if apply_adjustment:
                 specie = definition.get("adjustment_specie", DEFAULT_ADJUSTMENT_SPECIE)
                 csv_override = definition.get("adjustment_timeseries_csv", None)
-                csv_path = Path(csv_override) if csv_override else emission_file
+                if csv_override:
+                    csv_candidate = Path(csv_override)
+                    if not csv_candidate.is_absolute():
+                        emission_relative = emission_dir / csv_candidate
+                        if emission_relative.exists():
+                            csv_candidate = emission_relative
+                        else:
+                            csv_candidate = (ROOT / csv_candidate).resolve()
+                    csv_path = csv_candidate
+                else:
+                    csv_path = default_co2
                 adjustments = {specie: _timeseries_adjustment(csv_path)}
             else:
                 csv_path = None

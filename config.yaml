@@ -1,5 +1,5 @@
 calc_emissions:
-  emission_factors_file: data/emission_factors.csv
+  emission_factors_file: data/emission_factors.csv  # Columns: co2_mt_per_twh, so2_kt_per_twh, nox_kt_per_twh, pm25_kt_per_twh
   output_directory: resources
   years:
     start: 2025
@@ -139,5 +139,5 @@ climate_module:
         adjustment_specie: CO2 FFI
 
   emission_scenarios:
-    # Emission scenarios to load from <scenario>_emission_difference.csv (use 'all' or list of names).
+    # Emission scenarios to load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
     run: all

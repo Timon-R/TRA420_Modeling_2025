@@ -1,4 +1,9 @@
-"""Calculate electricity-sector emissions from demand and technology mix scenarios."""
+"""Calculate electricity-sector emissions from demand/mix scenarios.
+
+Results include per-pollutant (CO₂, SO₂, NOₓ, PM₂.₅) emissions in Mt/year. The
+climate module consumes the CO₂ deltas, while the additional pollutants support
+air-quality analysis.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,14 @@ LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
 
+POLLUTANTS = {
+    "co2": {"column": "co2_mt_per_twh", "to_mt": 1.0, "unit": "Mt"},
+    "so2": {"column": "so2_kt_per_twh", "to_mt": 1e-3, "unit": "Mt"},
+    "nox": {"column": "nox_kt_per_twh", "to_mt": 1e-3, "unit": "Mt"},
+    "pm25": {"column": "pm25_kt_per_twh", "to_mt": 1e-3, "unit": "Mt"},
+}
+
+
 @dataclass
 class EmissionScenarioResult:
     """Result container for an emission scenario."""
@@ -29,8 +42,8 @@ class EmissionScenarioResult:
     years: list[int]
     demand_twh: pd.Series
     generation_twh: pd.DataFrame
-    technology_emissions_mt: pd.DataFrame
-    total_emissions_mt: pd.Series
+    technology_emissions_mt: dict[str, pd.DataFrame]
+    total_emissions_mt: dict[str, pd.Series]
     delta_mtco2: pd.Series
 
 
@@ -102,12 +115,23 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
             emission_factors=emission_factors,
         )
 
-        delta = scenario_result.total_emissions_mt - baseline.total_emissions_mt
-        scenario_result.delta_mtco2 = delta
-        results[name] = scenario_result
+        scenario_dir = output_dir / name
+        scenario_dir.mkdir(parents=True, exist_ok=True)
 
-        output_path = output_dir / f"{name}_emission_difference.csv"
-        pd.DataFrame({"year": years, "delta": delta}).to_csv(output_path, index=False)
+        for pollutant, totals in scenario_result.total_emissions_mt.items():
+            baseline_totals = baseline.total_emissions_mt.get(pollutant)
+            if baseline_totals is None:
+                delta = totals.copy()
+            else:
+                delta = totals - baseline_totals
+
+            if pollutant == "co2":
+                scenario_result.delta_mtco2 = delta
+
+            file_path = scenario_dir / f"{pollutant}.csv"
+            pd.DataFrame({"year": years, "delta": delta}).to_csv(file_path, index=False)
+
+        results[name] = scenario_result
 
     return results
 
@@ -116,24 +140,40 @@ def calculate_emissions(
     name: str,
     demand_series: pd.Series,
     mix_shares: pd.DataFrame,
-    emission_factors: pd.Series,
+    emission_factors: pd.DataFrame,
 ) -> EmissionScenarioResult:
     """Calculate generation and emissions for a single scenario."""
     if not isinstance(demand_series.index, pd.Index):
         raise TypeError("demand_series must be a pandas Series with year index")
 
     generation = mix_shares.multiply(demand_series, axis=0)
-    emissions_mt = generation.mul(emission_factors, axis=1)
-    total_emissions_mt = emissions_mt.sum(axis=1)
+
+    technology_emissions: dict[str, pd.DataFrame] = {}
+    total_emissions: dict[str, pd.Series] = {}
+
+    for pollutant, meta in POLLUTANTS.items():
+        column = meta["column"]
+        if column not in emission_factors.columns:
+            continue
+        factors = emission_factors[column]
+        emissions = generation.mul(factors, axis=1)
+        emissions_mt = emissions * meta["to_mt"]
+        technology_emissions[pollutant] = emissions_mt
+        total_emissions[pollutant] = emissions_mt.sum(axis=1)
+
+    if "co2" not in total_emissions:
+        raise ValueError("Emission factors must include a 'co2_mt_per_twh' column.")
+
+    co2_series = total_emissions["co2"]
 
     return EmissionScenarioResult(
         name=name,
         years=list(demand_series.index.astype(int)),
         demand_twh=demand_series,
         generation_twh=generation,
-        technology_emissions_mt=emissions_mt,
-        total_emissions_mt=total_emissions_mt,
-        delta_mtco2=pd.Series(np.zeros_like(total_emissions_mt), index=total_emissions_mt.index),
+        technology_emissions_mt=technology_emissions,
+        total_emissions_mt=total_emissions,
+        delta_mtco2=pd.Series(np.zeros_like(co2_series.values), index=co2_series.index, dtype=float),
     )
 
 
@@ -149,14 +189,21 @@ def _generate_years(cfg: Mapping[str, float | int]) -> list[int]:
     return years
 
 
-def _load_emission_factors(path: Path) -> pd.Series:
+def _load_emission_factors(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Emission factors file not found: {path}")
-    df = pd.read_csv(path)
-    if "technology" not in df.columns or "emission_factor_mt_per_twh" not in df.columns:
-        raise ValueError("Emission factors CSV must contain 'technology' and 'emission_factor_mt_per_twh'.")
+    df = pd.read_csv(path, comment="#")
+    if "technology" not in df.columns:
+        raise ValueError("Emission factors CSV must contain a 'technology' column.")
     df["technology"] = df["technology"].str.strip().str.lower()
-    return df.set_index("technology")["emission_factor_mt_per_twh"]
+    required_columns = [meta["column"] for meta in POLLUTANTS.values()]
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        raise ValueError(
+            "Emission factors CSV is missing required columns: " + ", ".join(missing)
+        )
+    factors = df.set_index("technology")[required_columns].astype(float)
+    return factors
 
 
 def _resolve_demand_series(
