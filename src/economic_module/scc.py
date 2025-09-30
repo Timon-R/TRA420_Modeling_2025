@@ -8,6 +8,8 @@ Created on Tue Sep 30 10:06:42 2025
 import numpy as np
 import pandas as pd
 
+#the parameters and input
+
 #rho=pure rate of time preference
 rho=0.5 #unit:%
 #rho=0
