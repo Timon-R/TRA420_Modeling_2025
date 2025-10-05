@@ -11,7 +11,8 @@ A checklist of tasks, features, and improvements for this project.
 
 - [ ] Look through NEPCs of West Balkans _(Max, Elias)_
 - [x] Build emissions module that takes time series for electricity demand and electricity mixes and computes CO2, NOx and other emissions
-- [ ] Implement change in emission factors over time (?) 
+- [ ] Implement change in grid mix over time (?)
+- [ ] Insert correct values for emission factors. Change over time ?
 
 ## Climate emulator
 

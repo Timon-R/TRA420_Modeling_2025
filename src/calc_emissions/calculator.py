@@ -27,10 +27,11 @@ LOGGER.propagate = False
 
 
 POLLUTANTS = {
-    "co2": {"column": "co2_mt_per_twh", "to_mt": 1.0, "unit": "Mt"},
-    "so2": {"column": "so2_kt_per_twh", "to_mt": 1e-3, "unit": "Mt"},
-    "nox": {"column": "nox_kt_per_twh", "to_mt": 1e-3, "unit": "Mt"},
-    "pm25": {"column": "pm25_kt_per_twh", "to_mt": 1e-3, "unit": "Mt"},
+    "co2": {"column": "co2_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
+    "sox": {"column": "sox_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
+    "nox": {"column": "nox_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
+    "pm25": {"column": "pm25_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
+    "gwp100": {"column": "gwp100_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt CO2eq"},
 }
 
 
@@ -146,7 +147,11 @@ def calculate_emissions(
     if not isinstance(demand_series.index, pd.Index):
         raise TypeError("demand_series must be a pandas Series with year index")
 
-    generation = mix_shares.multiply(demand_series, axis=0)
+
+    # Convert demand_series from TWh to kWh for calculation
+    # 1 TWh = 1e9 kWh
+    demand_kwh = demand_series * 1e9
+    generation = mix_shares.multiply(demand_kwh, axis=0)
 
     technology_emissions: dict[str, pd.DataFrame] = {}
     total_emissions: dict[str, pd.Series] = {}
