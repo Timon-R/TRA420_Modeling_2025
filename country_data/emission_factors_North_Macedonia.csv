@@ -1,0 +1,10 @@
+technology,co2_mt_per_twh,so2_kt_per_twh,nox_kt_per_twh,pm25_kt_per_twh
+coal,0.98,8.2,4.7,0.42
+gas,0.42,0.55,1.55,0.055
+nuclear,0.018,0.0,0.0,0.0
+hydro,0.0052,0.0,0.0,0.0
+wind,0.0042,0.0,0.0,0.0
+solar,0.022,0.0,0.0,0.0
+biomass,0.31,2.1,1.1,0.22
+geothermal,0.052,0.11,0.11,0.022
+storage,0.022,0.0,0.0,0.0

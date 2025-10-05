@@ -1,0 +1,99 @@
+
+calc_emissions:
+  emission_factors_file: country_data/emission_factors_Kosovo.csv
+  output_directory: resources/Kosovo
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+  demand_scenarios:
+    low:
+      description: Kosovo low demand case (TWh).
+      values:
+        2025: 8
+        2030: 10
+        2040: 12
+        2050: 14
+        2060: 16
+        2070: 18
+        2080: 20
+        2090: 22
+        2100: 24
+    baseline:
+      description: Kosovo baseline demand case (TWh).
+      values:
+        2025: 10
+        2030: 12
+        2040: 14
+        2050: 16
+        2060: 18
+        2070: 20
+        2080: 22
+        2090: 24
+        2100: 26
+    high:
+      description: Kosovo high demand case (TWh).
+      values:
+        2025: 12
+        2030: 14
+        2040: 16
+        2050: 18
+        2060: 20
+        2070: 22
+        2080: 24
+        2090: 26
+        2100: 28
+  mix_scenarios:
+    reference:
+      description: Balanced mix with gradual decarbonisation.
+      shares:
+        coal: 0.70
+        gas: 0.10
+        hydro: 0.10
+        wind: 0.05
+        solar: 0.05
+    renewables_push:
+      description: Accelerated deployment of wind and solar.
+      shares:
+        coal: 0.30
+        gas: 0.10
+        hydro: 0.30
+        wind: 0.15
+        solar: 0.10
+        biomass: 0.05
+    fossil_lockin:
+      description: Slower transition away from fossil generation.
+      shares:
+        coal: 0.80
+        gas: 0.10
+        hydro: 0.05
+        wind: 0.03
+        solar: 0.02
+  baseline:
+    demand_scenario: baseline
+    mix_scenario: reference
+  scenarios:
+    - name: energy_mix_A
+      demand_scenario: high
+      mix_scenario: renewables_push
+    - name: energy_mix_B
+      demand_scenario: low
+      mix_scenario: fossil_lockin
+    - name: custom_example
+      demand_custom:
+        2025: 11
+        2030: 13
+        2040: 15
+        2050: 17
+        2060: 19
+        2070: 21
+        2080: 23
+        2090: 25
+        2100: 27
+      mix_custom:
+        shares:
+          coal: 0.50
+          gas: 0.10
+          hydro: 0.30
+          wind: 0.05
+          solar: 0.05

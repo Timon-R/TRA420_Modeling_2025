@@ -1,0 +1,100 @@
+
+calc_emissions:
+  emission_factors_file: country_data/emission_factors_Albania.csv
+  output_directory: resources/Albania
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+  demand_scenarios:
+    low:
+      description: Albania low demand case (TWh).
+      values:
+        2025: 10
+        2030: 12
+        2040: 14
+        2050: 16
+        2060: 18
+        2070: 20
+        2080: 22
+        2090: 24
+        2100: 26
+    baseline:
+      description: Albania baseline demand case (TWh).
+      values:
+        2025: 12
+        2030: 14
+        2040: 16
+        2050: 18
+        2060: 20
+        2070: 22
+        2080: 24
+        2090: 26
+        2100: 28
+    high:
+      description: Albania high demand case (TWh).
+      values:
+        2025: 14
+        2030: 16
+        2040: 18
+        2050: 20
+        2060: 22
+        2070: 24
+        2080: 26
+        2090: 28
+        2100: 30
+  mix_scenarios:
+    reference:
+      description: Balanced mix with gradual decarbonisation.
+      shares:
+        coal: 0.10
+        gas: 0.10
+        hydro: 0.60
+        wind: 0.10
+        solar: 0.10
+    renewables_push:
+      description: Accelerated deployment of wind and solar.
+      shares:
+        coal: 0.05
+        gas: 0.08
+        hydro: 0.50
+        wind: 0.20
+        solar: 0.15
+        biomass: 0.02
+    fossil_lockin:
+      description: Slower transition away from fossil generation.
+      shares:
+        coal: 0.20
+        gas: 0.15
+        hydro: 0.45
+        wind: 0.10
+        solar: 0.08
+        biomass: 0.02
+  baseline:
+    demand_scenario: baseline
+    mix_scenario: reference
+  scenarios:
+    - name: energy_mix_A
+      demand_scenario: high
+      mix_scenario: renewables_push
+    - name: energy_mix_B
+      demand_scenario: low
+      mix_scenario: fossil_lockin
+    - name: custom_example
+      demand_custom:
+        2025: 13
+        2030: 15
+        2040: 17
+        2050: 19
+        2060: 21
+        2070: 23
+        2080: 25
+        2090: 27
+        2100: 29
+      mix_custom:
+        shares:
+          coal: 0.08
+          gas: 0.12
+          hydro: 0.55
+          wind: 0.13
+          solar: 0.10
