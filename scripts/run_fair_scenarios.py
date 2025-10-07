@@ -19,8 +19,9 @@ Configuration lives in ``config.yaml`` under the ``climate_module`` section:
 Output
 ------
 For every combination of emission scenario and climate pathway the script writes a
-CSV to ``results/climate/<emission>_<climate>.csv`` and prints a summary table with
-2030, 2050 and 2100 temperatures/deltas.
+CSV to ``results/climate/<emission>_<climate>.csv`` (archival result) and to
+``resources/climate/<emission>_<climate>.csv`` (shared input for downstream modules).
+It also prints a summary table with 2030, 2050 and 2100 temperatures/deltas.
 
 Emission time series
 --------------------
@@ -112,6 +113,9 @@ SAMPLE_YEARS = _derive_sample_years(CONFIG.get("sample_years_option", "default")
 
 OUTPUT_DIR = ROOT / CONFIG.get("output_directory", "results/climate")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+RESOURCE_DIR = ROOT / CONFIG.get("resource_directory", "resources/climate")
+RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
 EMISSION_DIR = ROOT / CONFIG.get("emission_timeseries_directory", "resources")
 EMISSION_DIR.mkdir(parents=True, exist_ok=True)
@@ -230,6 +234,7 @@ def _write_csv(label: str, result) -> None:
         }
     )
     df.to_csv(OUTPUT_DIR / f"{label}.csv", index=False)
+    df.to_csv(RESOURCE_DIR / f"{label}.csv", index=False)
 
 
 def _print_summary(label: str, result) -> None:

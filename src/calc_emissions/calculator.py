@@ -87,6 +87,9 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
     output_dir = Path(module_cfg.get("output_directory", "resources"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    results_dir = Path(module_cfg.get("results_directory", "results/emissions"))
+    results_dir.mkdir(parents=True, exist_ok=True)
+
     results: dict[str, EmissionScenarioResult] = {}
     for scenario_cfg in module_cfg.get("scenarios", []):
         name = scenario_cfg.get("name")
@@ -118,6 +121,9 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
         scenario_dir = output_dir / name
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
+        results_scenario_dir = results_dir / name
+        results_scenario_dir.mkdir(parents=True, exist_ok=True)
+
         for pollutant, totals in scenario_result.total_emissions_mt.items():
             baseline_totals = baseline.total_emissions_mt.get(pollutant)
             if baseline_totals is None:
@@ -128,8 +134,12 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
             if pollutant == "co2":
                 scenario_result.delta_mtco2 = delta
 
+            df = pd.DataFrame({"year": years, "delta": delta})
             file_path = scenario_dir / f"{pollutant}.csv"
-            pd.DataFrame({"year": years, "delta": delta}).to_csv(file_path, index=False)
+            df.to_csv(file_path, index=False)
+
+            results_file_path = results_scenario_dir / f"{pollutant}.csv"
+            df.to_csv(results_file_path, index=False)
 
         results[name] = scenario_result
 
