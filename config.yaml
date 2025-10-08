@@ -1,6 +1,7 @@
 calc_emissions:
   emission_factors_file: data/emission_factors.csv  # Columns: co2_mt_per_twh, so2_kt_per_twh, nox_kt_per_twh, pm25_kt_per_twh
   output_directory: resources
+  results_directory: results/emissions  # Mirror CSVs for reporting/archival use.
   years:
     start: 2025
     end: 2100
@@ -107,6 +108,8 @@ calc_emissions:
 climate_module:
   # Directory for climate results (relative to repository root).
   output_directory: results/climate
+  # Copy of temperature outputs used as shared resources across modules.
+  resource_directory: resources/climate
   # Sampling option for CSV outputs: 'default' (5-year steps to 2050, then 10-year) or 'full'.
   sample_years_option: default
   # Folder containing <scenario>_emission_difference.csv files (delta in Mt CO₂/yr; negative reduces emissions).
@@ -154,3 +157,41 @@ pattern_scaling:
     - KOS # Kosovo, unofficially assigned ISO3 code
     - SRB
     - MNE
+economic_module:
+  # Folder receiving SCC summary, detail, and per-year CSVs.
+  output_directory: results/economic
+  # GDP (and optional population) time series with columns: year, gdp_trillion_usd [, population_million].
+  gdp_series: data/gdp_dummy.csv
+  # Absolute or anomaly temperature pathways per scenario (°C). Keys must match emission_series.
+  # Use the climate-module output CSVs (temperature_baseline/temperature_adjusted columns).
+  temperature_series:
+    baseline: resources/climate/energy_mix_B_ssp245.csv
+    policy: resources/climate/energy_mix_A_ssp245.csv
+  # Annual CO₂ deltas per scenario. CSVs must expose 'year' plus the column named in emission_column.
+  # Use the FaIR-compatible output in resources/<scenario>/co2.csv.
+  emission_series:
+    baseline: resources/energy_mix_B/co2.csv
+    policy: resources/energy_mix_A/co2.csv
+  # Scenario label treated as the baseline when computing damage differences.
+  reference_scenario: baseline
+  # Additional scenarios (besides the reference) evaluated by default.
+  evaluation_scenarios:
+    - policy
+  # Present-value reference year for discounting (must exist in the GDP/temperature grids).
+  base_year: 2025
+  # SCC aggregation style: 'average' (policy-wide USD/tCO₂) or 'per_year' (report time series).
+  aggregation: average
+  # Column name in emission CSVs (FaIR export uses 'delta' for Mt CO₂/yr differences).
+  emission_column: delta
+  # Unit converter applied to emission_column (1e6 converts Mt ➝ tonnes of CO₂).
+  emission_to_tonnes: 1000000.0
+  # Discounting configurations. Set run: all, or provide an explicit list of method identifiers.
+  methods:
+    run: all
+    # Fixed annual discount rate r; SCC uses 1/(1+r)^{t-base_year}.
+    constant_discount:
+      discount_rate: 0.03
+    # Ramsey rule parameters: rho = pure time preference, eta = marginal utility elasticity.
+    ramsey_discount:
+      rho: 0.005
+      eta: 1.0
