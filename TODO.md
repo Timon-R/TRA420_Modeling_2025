@@ -14,12 +14,14 @@ A checklist of tasks, features, and improvements for this project.
 ## Climate emulator
 
 - [x] build configurable climate module that converts emission difference into global temperature change
-- [ ] add pattern scaling functionality
 - [ ] add extreme weather functionality
 
 ## Pattern scaling
 
-- [ ] Insert Todo here
+- [x] add mean temperature pattern scaling using existing averaged data
+- [ ] build custom pattern scaling
+- [ ] add precipitation scaling
+- [ ] add extreme weather scaling
 
 ## Damage function
 

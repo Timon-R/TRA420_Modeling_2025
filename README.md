@@ -9,7 +9,8 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 - `src/`
   - `climate_module/` — FaIR wrappers and scenario tools.
-  - `calc_emissions/`- Converting electricity demand and mix into emission difference from baseline
+  - `calc_emissions/`- Converting electricity demand and mix into emission difference from baseline.
+  - `pattern_scaling/` — local temperature changes from global means.
   - *(planned)* `impacts/`, `ui/`, `common/` packages that
     will divide the workflow into focused modules as they are implemented.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
@@ -112,3 +113,11 @@ All runtime settings live in `config.yaml`.
     - `parameters`: global FaIR settings; includes time grid (`start_year`, `end_year`, `timestep`) and climate overrides (`deep_ocean_efficacy`, `forcing_4co2`, `equilibrium_climate_sensitivity`).
     - `climate_scenarios`: SSP pathways to run (use `run: all` or list of IDs) with per-pathway tweaks.
     - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only `co2.csv` feeds FaIR; other pollutant files are optional analytics inputs.
+
+- `pattern_scaling`
+  - Calculates local temperature and precipitation changes from global means using pattern scaling.
+  - Key options:
+    - `output_directory`: where local climate CSVs are written (`results/pattern_scaling` by default).
+    - `scaling_factors_file`: CSV with pattern scaling coefficients (°C per °C global, % precipitation per °C global) for each region.
+    - `climate_scenarios`: which climate scenario outputs from the climate module to process (`all` or list of IDs).
+    - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only scenarios processed by the climate module are valid here.
