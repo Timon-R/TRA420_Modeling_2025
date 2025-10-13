@@ -173,6 +173,10 @@ economic_module:
   emission_column: delta
   # Unit converter applied to emission_column (1e6 converts Mt ➝ tonnes of CO₂).
   emission_to_tonnes: 1000000.0
+  # Damage function configuration for DICE-style quadratic damages.
+  damage_function:
+    delta1: 0.0
+    delta2: 0.002
   # Discounting configurations. Set run: all, or provide an explicit list of method identifiers.
   methods:
     run: all

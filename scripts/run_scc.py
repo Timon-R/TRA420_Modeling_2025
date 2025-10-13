@@ -93,6 +93,9 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
     aggregation_default = str(cfg.get("aggregation", "average")).lower()
     if aggregation_default not in AVAILABLE_AGGREGATIONS:
         aggregation_default = "average"
+    damage_cfg = cfg.get("damage_function", {})
+    damage_delta1_default = float(damage_cfg.get("delta1", 0.0))
+    damage_delta2_default = float(damage_cfg.get("delta2", 0.002))
 
     parser = argparse.ArgumentParser(
         description="Calculate SCC for temperature/emission scenarios relative to a reference pathway.")
@@ -178,6 +181,18 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
         type=float,
         default=float(cfg.get("emission_to_tonnes", 1e6)),
         help="Factor converting emission column units to t CO₂ (default converts Mt to tonnes).",
+    )
+    parser.add_argument(
+        "--damage-delta1",
+        type=float,
+        default=damage_delta1_default,
+        help="Linear term (delta1) for the DICE quadratic damage function.",
+    )
+    parser.add_argument(
+        "--damage-delta2",
+        type=float,
+        default=damage_delta2_default,
+        help="Quadratic term (delta2) for the DICE damage function.",
     )
     parser.add_argument(
         "--output-directory",
@@ -301,6 +316,10 @@ def main() -> None:
 
     summary_rows = []
     aggregation = cast(SCCAggregation, args.aggregation)
+    damage_kwargs = {
+        "delta1": args.damage_delta1,
+        "delta2": args.damage_delta2,
+    }
 
     for scenario in targets:
         for method in methods:
@@ -310,6 +329,7 @@ def main() -> None:
                 "base_year": args.base_year,
                 "aggregation": aggregation,
                 "add_tco2": args.add_tco2,
+                "damage_kwargs": damage_kwargs,
             }
             if method == "constant_discount":
                 kwargs["discount_rate"] = args.discount_rate
