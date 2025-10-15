@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Oct  6 15:49:06 2025
+Created on Tue Oct 14 16:13:39 2025
 
 @author: chengf
 """
@@ -42,9 +42,67 @@ population = np.array(population)
 # -------------------------
 # Damage function from DICE, the fraction of GDP damage, so we need the GDP data
 # -------------------------
-def damage_dice(temp, delta1=0.0, delta2=0.002):
-    """DICE-style: damage percent = delta1*T + delta2*T^2 (T in °C)"""
-    return delta1 * temp + delta2 * (temp ** 2)
+# def damage_dice(temp, delta1=0.0, delta2=0.002):
+#     """DICE-style: damage percent = delta1*T + delta2*T^2 (T in °C)"""
+#     return delta1 * temp + delta2 * (temp ** 2)
+def damage_dice(temp,
+                delta1=0.0, delta2=0.002,
+                # ----- Threshold parameters -----
+                use_threshold=False,
+                T_threshold=3.0,
+                threshold_scale=0.2,
+                threshold_power=2.0,
+                # ----- Saturation parameters -----
+                use_saturation=True,
+                max_frac=0.99,
+                saturation_mode='rational',
+                # ----- Catastrophic parameters -----
+                use_catastrophic=False,
+                T_catastrophic=5.0,
+                disaster_frac=0.75,
+                disaster_gamma=1.0,
+                disaster_mode='prob'):
+    """
+    Unified DICE damage function with optional extensions.
+    Returns GDP damage fraction ∈ [0, max_frac].
+    """
+
+    temp = np.asarray(temp)
+
+    # --- 1. Base DICE damage ---
+    damage = delta1 * temp + delta2 * (temp ** 2)
+
+    # --- 2. Threshold acceleration ---
+    if use_threshold:
+        amplify = 1.0 + threshold_scale * np.maximum(0, temp - T_threshold) ** threshold_power
+        damage *= amplify
+
+    # --- 3. Saturation (prevent GDP < 0) ---
+    if use_saturation:
+        if saturation_mode == 'rational':
+            x = np.maximum(0.0, damage)
+            damage = x / (1.0 + x) * max_frac
+        elif saturation_mode == 'clamp':
+            damage = np.clip(damage, 0.0, max_frac)
+        else:
+            raise ValueError("saturation_mode must be 'rational' or 'clamp'")
+
+    # --- 4. Catastrophic / disaster risk ---
+    if use_catastrophic:
+        if disaster_mode == 'step':
+            extra = np.where(temp >= T_catastrophic, disaster_frac, 0.0)
+        elif disaster_mode == 'prob':
+            P = 1.0 - np.exp(-disaster_gamma * np.maximum(0.0, temp - T_catastrophic))
+            extra = P * disaster_frac
+        else:
+            raise ValueError("disaster_mode must be 'step' or 'prob'")
+
+        damage += extra
+
+    # --- 5. Final cap ---
+    damage = np.minimum(damage, max_frac)
+
+    return damage
 
 # -------------------------
 # Helper: compute temp impulse from 1 tCO2 using Bern IRF + 1-box EBM
@@ -105,7 +163,16 @@ temp_impulse_per_tco2[base_year_index:]= temp_impulse_from_1tco2(N)[0:(N-base_ye
 #D_usd_base: damage under baseline scenario
 #D_usd_pert: damage under perturbation sceanrio
 def damage(temp_baseline, temp_impulse_per_tco2, gdp,
-                     damage_func, damage_kwargs=None,
+                     damage_func, damage_kwargs={
+        "use_threshold": True,
+        "T_threshold": 3.0,
+        "threshold_scale": 0.2,
+        "use_saturation": True,
+        "saturation_mode": "rational",
+        "use_catastrophic": True,
+        "T_catastrophic": 5.0,
+        "disaster_frac": 0.75,
+        "disaster_mode": "prob"},
                      add_tco2=1.0, damage_is_fraction=True):
     """
     temp_baseline: baseline temps (N)
