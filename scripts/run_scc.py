@@ -16,8 +16,13 @@ Inputs
 - Temperature CSVs must expose ``year`` and the column named via ``--temperature-column`` (default ``temperature_adjusted``).
 - Emission CSVs supply annual CO₂ deltas with ``year`` plus ``--emission-column`` (default ``delta``);
   values are converted to tonnes using ``--emission-unit-multiplier``.
+- Temperature CSVs exported by the climate module now include ``climate_scenario`` to signal which
+  SSP family should drive GDP/population selection.
 - Scenario labels supplied for temperatures and emissions must match exactly.
 - Aggregation can be ``average`` (policy-wide USD/tCO₂) or ``per_year`` (time-varying SCC series).
+- Damage function parameters (DICE ``delta1`` / ``delta2`` and optional threshold, saturation,
+  and catastrophe extensions) can be set in ``config.yaml`` or overridden via the
+  ``--damage-*`` CLI options.
 
 The script loads GDP, temperature, and emission difference series, feeds them into
 :mod:`economic_module`, and writes per-method detail tables plus SCC time paths to
@@ -88,7 +93,8 @@ def _default_methods(cfg: dict) -> list[str]:
 
 
 def _build_parser(cfg: dict) -> argparse.ArgumentParser:
-    gdp_default = cfg.get("gdp_series", "data/gdp_dummy.csv")
+    gdp_default = cfg.get("gdp_series")
+    gdp_pop_dir_default = cfg.get("gdp_population_directory", "data/GDP_and_Population_data")
     base_year_default = int(cfg.get("base_year", 2025))
     aggregation_default = str(cfg.get("aggregation", "average")).lower()
     if aggregation_default not in AVAILABLE_AGGREGATIONS:
@@ -96,6 +102,18 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
     damage_cfg = cfg.get("damage_function", {})
     damage_delta1_default = float(damage_cfg.get("delta1", 0.0))
     damage_delta2_default = float(damage_cfg.get("delta2", 0.002))
+    damage_use_threshold_default = bool(damage_cfg.get("use_threshold", False))
+    damage_threshold_temp_default = float(damage_cfg.get("threshold_temperature", 3.0))
+    damage_threshold_scale_default = float(damage_cfg.get("threshold_scale", 0.2))
+    damage_threshold_power_default = float(damage_cfg.get("threshold_power", 2.0))
+    damage_use_saturation_default = bool(damage_cfg.get("use_saturation", False))
+    damage_max_fraction_default = float(damage_cfg.get("max_fraction", 0.99))
+    damage_saturation_mode_default = str(damage_cfg.get("saturation_mode", "rational")).lower()
+    damage_use_catastrophic_default = bool(damage_cfg.get("use_catastrophic", False))
+    damage_catastrophic_temp_default = float(damage_cfg.get("catastrophic_temperature", 5.0))
+    damage_disaster_fraction_default = float(damage_cfg.get("disaster_fraction", 0.75))
+    damage_disaster_gamma_default = float(damage_cfg.get("disaster_gamma", 1.0))
+    damage_disaster_mode_default = str(damage_cfg.get("disaster_mode", "prob")).lower()
 
     parser = argparse.ArgumentParser(
         description="Calculate SCC for temperature/emission scenarios relative to a reference pathway.")
@@ -122,7 +140,12 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
     parser.add_argument(
         "--gdp-csv",
         default=gdp_default,
-        help="CSV with 'year', 'gdp_trillion_usd', and optionally 'population_million'.",
+        help="Optional override CSV with 'year', 'gdp_trillion_usd', and optionally 'population_million'.",
+    )
+    parser.add_argument(
+        "--gdp-population-directory",
+        default=gdp_pop_dir_default,
+        help="Directory containing SSP GDP/Population workbooks (GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx).",
     )
     parser.add_argument(
         "--base-year",
@@ -193,6 +216,101 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
         type=float,
         default=damage_delta2_default,
         help="Quadratic term (delta2) for the DICE damage function.",
+    )
+    parser.add_argument(
+        "--damage-threshold-temperature",
+        type=float,
+        default=damage_threshold_temp_default,
+        help="Temperature (°C) above which threshold amplification begins.",
+    )
+    parser.add_argument(
+        "--damage-threshold-scale",
+        type=float,
+        default=damage_threshold_scale_default,
+        help="Scale factor applied when threshold amplification is enabled.",
+    )
+    parser.add_argument(
+        "--damage-threshold-power",
+        type=float,
+        default=damage_threshold_power_default,
+        help="Power used in the threshold amplification curve.",
+    )
+    parser.add_argument(
+        "--damage-max-fraction",
+        type=float,
+        default=damage_max_fraction_default,
+        help="Upper bound on GDP loss fraction (used for saturation and final cap).",
+    )
+    parser.add_argument(
+        "--damage-saturation-mode",
+        choices=("rational", "clamp"),
+        default=damage_saturation_mode_default,
+        help="Saturation style when enabled: 'rational' curve or hard clamp.",
+    )
+    parser.add_argument(
+        "--damage-disaster-mode",
+        choices=("prob", "step"),
+        default=damage_disaster_mode_default,
+        help="Catastrophic add-on style: probabilistic ('prob') or step change.",
+    )
+    parser.set_defaults(
+        damage_use_threshold=damage_use_threshold_default,
+        damage_use_saturation=damage_use_saturation_default,
+        damage_use_catastrophic=damage_use_catastrophic_default,
+    )
+    parser.add_argument(
+        "--damage-use-threshold",
+        dest="damage_use_threshold",
+        action="store_true",
+        help="Enable temperature threshold amplification in the damage function.",
+    )
+    parser.add_argument(
+        "--damage-no-threshold",
+        dest="damage_use_threshold",
+        action="store_false",
+        help="Disable temperature threshold amplification.",
+    )
+    parser.add_argument(
+        "--damage-use-saturation",
+        dest="damage_use_saturation",
+        action="store_true",
+        help="Enable saturation of damages to stay below the configured max fraction.",
+    )
+    parser.add_argument(
+        "--damage-no-saturation",
+        dest="damage_use_saturation",
+        action="store_false",
+        help="Disable saturation; damages still capped at the max fraction.",
+    )
+    parser.add_argument(
+        "--damage-use-catastrophic",
+        dest="damage_use_catastrophic",
+        action="store_true",
+        help="Enable catastrophic damages above the catastrophic temperature.",
+    )
+    parser.add_argument(
+        "--damage-no-catastrophic",
+        dest="damage_use_catastrophic",
+        action="store_false",
+        help="Disable catastrophic damage add-ons.",
+    )
+    parser.add_argument(
+        "--damage-catastrophic-temperature",
+        type=float,
+        default=damage_catastrophic_temp_default,
+        help="Temperature (°C) at which catastrophic damages begin.",
+    )
+    parser.add_argument(
+        "--damage-disaster-fraction",
+        type=float,
+        default=damage_disaster_fraction_default,
+        help="Fractional GDP loss added during catastrophic events.",
+    )
+    parser.add_argument(
+        "--damage-disaster-gamma",
+        type=float,
+        default=damage_disaster_gamma_default,
+        help="Controls the steepness of the probabilistic catastrophic response.",
     )
     parser.add_argument(
         "--output-directory",
@@ -300,7 +418,12 @@ def main() -> None:
     if not targets:
         parser.error("No target scenarios selected for evaluation.")
 
-    gdp_path = _resolve_path(args.gdp_csv)
+    gdp_path = _resolve_path(args.gdp_csv) if args.gdp_csv else None
+    gdp_population_directory = (
+        _resolve_path(args.gdp_population_directory)
+        if args.gdp_population_directory
+        else None
+    )
 
     inputs = EconomicInputs.from_csv(
         temperature_sources,
@@ -309,6 +432,7 @@ def main() -> None:
         temperature_column=args.temperature_column,
         emission_column=args.emission_column,
         emission_to_tonnes=args.emission_unit_multiplier,
+        gdp_population_directory=gdp_population_directory,
     )
 
     output_dir = _resolve_path(args.output_directory)
@@ -319,6 +443,18 @@ def main() -> None:
     damage_kwargs = {
         "delta1": args.damage_delta1,
         "delta2": args.damage_delta2,
+        "use_threshold": args.damage_use_threshold,
+        "threshold_temperature": args.damage_threshold_temperature,
+        "threshold_scale": args.damage_threshold_scale,
+        "threshold_power": args.damage_threshold_power,
+        "use_saturation": args.damage_use_saturation,
+        "max_fraction": args.damage_max_fraction,
+        "saturation_mode": args.damage_saturation_mode,
+        "use_catastrophic": args.damage_use_catastrophic,
+        "catastrophic_temperature": args.damage_catastrophic_temperature,
+        "disaster_fraction": args.damage_disaster_fraction,
+        "disaster_gamma": args.damage_disaster_gamma,
+        "disaster_mode": args.damage_disaster_mode,
     }
 
     for scenario in targets:
