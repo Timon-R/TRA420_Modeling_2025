@@ -157,6 +157,7 @@ pattern_scaling:
     - KOS # Kosovo, unofficially assigned ISO3 code
     - SRB
     - MNE
+    
 economic_module:
   # Folder receiving SCC summary, detail, and per-year CSVs.
   output_directory: results/economic

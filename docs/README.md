@@ -11,6 +11,8 @@ calculations.
   adjustment mechanics.
 - `economic_module.md` – social cost of carbon workflow, damage functions, and
   discounting methods.
+- `pattern_scaling.md` – pattern scaling pipeline, required inputs, and output
+  structure for country-level climate trajectories.
 
 Refer to the module documents when creating scenarios, extending the pipeline,
 or validating scientific assumptions.

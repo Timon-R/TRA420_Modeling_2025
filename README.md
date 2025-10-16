@@ -9,6 +9,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 - `src/`
   - `climate_module/` — FaIR wrappers and scenario tools.
+  - `pattern_scaling/` — converts global climate responses into country-level projections via pattern scaling.
   - `calc_emissions/`- Converting electricity demand and mix into emission difference from baseline.
   - `pattern_scaling/` — local temperature changes from global means.
   - *(planned)* `impacts/`, `ui/`, `common/` packages that
@@ -115,6 +116,13 @@ All runtime settings live in `config.yaml`.
     - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only `co2.csv` feeds FaIR; other pollutant files are optional analytics inputs.
 
 - `pattern_scaling`
+  - Consumes global climate CSVs and applies country-specific scaling factors.
+  - Key options:
+    - `output_directory`: destination for per-country scaled results.
+    - `scaling_factors_file`: path to the scaling table (e.g., `data/cmip6_pattern_scaling_by_country_mean.csv`).
+    - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`).
+    - `countries`: ISO3 codes to generate outputs for.
+    - Uses the `climate_module` scenario definitions to match scaling factors (first four characters of the scenario `id`).
   - Calculates local temperature and precipitation changes from global means using pattern scaling.
   - Key options:
     - `output_directory`: where local climate CSVs are written (`results/pattern_scaling` by default).
