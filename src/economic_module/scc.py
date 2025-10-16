@@ -10,7 +10,7 @@ import re
 import numpy as np
 import pandas as pd
 
-DamageFunction = Callable[[np.ndarray], np.ndarray]
+DamageFunction = Callable[..., np.ndarray]
 SCCMethod = Literal["constant_discount", "ramsey_discount"]
 SCCAggregation = Literal["per_year", "average"]
 
@@ -24,6 +24,72 @@ def _column(prefix: str, scenario: str) -> str:
     return f"{prefix}_{_safe_key(scenario)}"
 
 
+def _extract_climate_scenarios(
+    temperature_frames: Mapping[str, pd.DataFrame]
+) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for label, frame in temperature_frames.items():
+        if "climate_scenario" not in frame.columns:
+            continue
+        values = frame["climate_scenario"].dropna().unique()
+        if values.size == 0:
+            continue
+        if len(values) > 1:
+            raise ValueError(
+                f"Temperature series '{label}' references multiple climate scenarios: {values}."
+            )
+        mapping[label] = str(values[0])
+    return mapping
+
+
+def _infer_ssp_family(climate_id: str) -> str:
+    match = re.match(r"ssp\s*([0-9])", climate_id, re.IGNORECASE)
+    if not match:
+        raise ValueError(f"Cannot infer SSP family from climate scenario '{climate_id}'.")
+    return f"SSP{match.group(1)}"
+
+
+def _load_ssp_table(path: Path, key_column: str, key: str) -> pd.Series:
+    try:
+        df = pd.read_excel(path)
+    except ImportError as exc:  # pragma: no cover - dependency hint
+        raise ImportError(
+            "Reading SSP workbooks requires 'openpyxl'. Install it or provide a CSV override via gdp_series."
+        ) from exc
+    if key_column not in df.columns:
+        raise ValueError(f"Expected column '{key_column}' in {path.name}.")
+    df = df.rename(columns={key_column: "key"}).set_index("key")
+    key_upper = key.upper()
+    if key_upper not in df.index:
+        raise ValueError(f"Scenario '{key_upper}' not found in {path.name}.")
+    series = df.loc[key_upper].dropna()
+    series.index = series.index.astype(int)
+    return series.astype(float)
+
+
+def _load_ssp_economic_data(ssp_family: str, directory: Path) -> tuple[pd.Series, pd.Series | None]:
+    gdp_path = directory / "GDP_SSP1_5.xlsx"
+    pop_path = directory / "POP_SSP1_5.xlsx"
+    if not gdp_path.exists():
+        raise FileNotFoundError(f"Missing GDP dataset: {gdp_path}")
+
+    gdp_series = _load_ssp_table(gdp_path, "GDP", ssp_family) / 1000.0  # convert billions to trillions
+
+    population_series: pd.Series | None = None
+    if pop_path.exists():
+        population_series = _load_ssp_table(pop_path, "Population", ssp_family)
+
+    return gdp_series, population_series
+
+
+def _align_series(series: pd.Series, years: Iterable[int]) -> pd.Series:
+    idx = pd.Index(sorted(set(int(y) for y in years)))
+    aligned = series.reindex(idx)
+    aligned = aligned.sort_index()
+    aligned = aligned.ffill().bfill()
+    return aligned
+
+
 @dataclass(slots=True)
 class EconomicInputs:
     """Economic, temperature, and emission series required to compute SCC."""
@@ -33,6 +99,8 @@ class EconomicInputs:
     temperature_scenarios_c: dict[str, np.ndarray]
     emission_scenarios_tco2: dict[str, np.ndarray]
     population_million: np.ndarray | None = None
+    climate_scenarios: dict[str, str] | None = None
+    ssp_family: str | None = None
 
     def __post_init__(self) -> None:
         if not self.temperature_scenarios_c:
@@ -50,6 +118,12 @@ class EconomicInputs:
         for name, emissions in self.emission_scenarios_tco2.items():
             if len(emissions) != length:
                 raise ValueError(f"Emission series '{name}' does not match the year vector length.")
+        if self.climate_scenarios is None:
+            self.climate_scenarios = {}
+        else:
+            missing = set(self.temperature_scenarios_c) - set(self.climate_scenarios)
+            if missing:
+                raise ValueError(f"Missing climate scenario metadata for: {sorted(missing)}")
 
     @property
     def scenario_names(self) -> list[str]:
@@ -72,13 +146,14 @@ class EconomicInputs:
         cls,
         temperature_paths: Mapping[str, Path | str],
         emission_paths: Mapping[str, Path | str],
-        gdp_path: Path | str,
+        gdp_path: Path | str | None = None,
         *,
         temperature_column: str = "temperature_c",
         emission_column: str = "delta_mtco2",
         emission_to_tonnes: float = 1e6,
         gdp_column: str = "gdp_trillion_usd",
         population_column: str = "population_million",
+        gdp_population_directory: Path | str | None = None,
     ) -> "EconomicInputs":
         """Load inputs from CSV files.
 
@@ -97,7 +172,11 @@ class EconomicInputs:
 
         temp_frames: dict[str, pd.DataFrame] = {}
         for label, path in temperature_paths.items():
-            frame = _load_yearly_csv(path, required_columns={temperature_column})
+            frame = _load_yearly_csv(
+                path,
+                required_columns={temperature_column},
+                optional_columns={"climate_scenario"},
+            )
             temp_frames[label] = frame.rename(columns={temperature_column: "temperature_c"})
 
         emission_frames: dict[str, pd.DataFrame] = {}
@@ -105,11 +184,43 @@ class EconomicInputs:
             frame = _load_yearly_csv(path, required_columns={emission_column})
             emission_frames[label] = frame.rename(columns={emission_column: "emission_raw"})
 
-        gdp_frame = _load_yearly_csv(
-            gdp_path,
-            required_columns={gdp_column},
-            optional_columns={population_column},
-        )
+        climate_scenarios = _extract_climate_scenarios(temp_frames)
+        ssp_family: str | None = None
+
+        if gdp_population_directory is not None:
+            if not climate_scenarios:
+                raise ValueError(
+                    "Temperature CSVs must include 'climate_scenario' to determine SSP-specific GDP."
+                )
+            families = {_infer_ssp_family(climate_id) for climate_id in climate_scenarios.values()}
+            if len(families) != 1:
+                raise ValueError(
+                    "Temperature CSVs reference multiple SSP families; supply a single SSP "
+                    "or provide custom GDP data."
+                )
+            ssp_family = families.pop()
+            gdp_series, population_series = _load_ssp_economic_data(
+                ssp_family, Path(gdp_population_directory)
+            )
+            gdp_series = gdp_series.sort_index()
+            if population_series is not None:
+                population_series = _align_series(population_series.sort_index(), gdp_series.index)
+            gdp_frame = pd.DataFrame(
+                {
+                    "year": gdp_series.index.astype(int),
+                    gdp_column: gdp_series.values,
+                }
+            )
+            if population_series is not None:
+                gdp_frame[population_column] = population_series.loc[gdp_frame["year"]].to_numpy()
+        else:
+            if gdp_path is None:
+                raise ValueError("Provide either gdp_path or gdp_population_directory.")
+            gdp_frame = _load_yearly_csv(
+                gdp_path,
+                required_columns={gdp_column},
+                optional_columns={population_column},
+            )
 
         common_years = set(gdp_frame["year"].astype(int))
         for frame in temp_frames.values():
@@ -141,6 +252,8 @@ class EconomicInputs:
             temperature_scenarios_c=temperature_series,
             emission_scenarios_tco2=emission_series,
             population_million=population,
+            climate_scenarios=climate_scenarios,
+            ssp_family=ssp_family,
         )
 
     def to_frame(self, *, scenarios: Iterable[str] | None = None) -> pd.DataFrame:
@@ -154,6 +267,10 @@ class EconomicInputs:
         for scenario in scenario_list:
             data[_column("temperature_c", scenario)] = self.temperature(scenario)
             data[_column("emissions_tco2", scenario)] = self.emission(scenario)
+            if self.climate_scenarios and scenario in self.climate_scenarios:
+                data[_column("climate_scenario", scenario)] = np.full_like(
+                    self.years, self.climate_scenarios[scenario], dtype=object
+                )
         return pd.DataFrame(data)
 
 
@@ -203,11 +320,77 @@ def _load_yearly_csv(
 # ---------------------------------------------------------------------------
 
 
-def damage_dice(temp: np.ndarray, *, delta1: float = 0.0, delta2: float = 0.002) -> np.ndarray:
-    """DICE-style quadratic damage function returning fraction of GDP loss."""
+def damage_dice(
+    temp: np.ndarray,
+    *,
+    delta1: float = 0.0,
+    delta2: float = 0.002,
+    # Threshold amplification
+    use_threshold: bool = False,
+    threshold_temperature: float = 3.0,
+    threshold_scale: float = 0.2,
+    threshold_power: float = 2.0,
+    # Saturation / cap
+    use_saturation: bool = False,
+    max_fraction: float = 0.99,
+    saturation_mode: str = "rational",
+    # Catastrophic add-ons
+    use_catastrophic: bool = False,
+    catastrophic_temperature: float = 5.0,
+    disaster_fraction: float = 0.75,
+    disaster_gamma: float = 1.0,
+    disaster_mode: str = "prob",
+) -> np.ndarray:
+    """Return GDP damage fractions using a configurable DICE-style function.
 
-    temp = np.asarray(temp, dtype=float)
-    return delta1 * temp + delta2 * temp**2
+    The baseline follows ``delta1 * T + delta2 * T^2``. Optional extensions:
+
+    - ``use_threshold`` scales damages once temperature exceeds
+      ``threshold_temperature`` (power-law amplification).
+    - ``use_saturation`` keeps damages below ``max_fraction`` via a rational
+      curve (default) or a hard clamp.
+    - ``use_catastrophic`` adds disaster losses when temperatures cross
+      ``catastrophic_temperature`` either step-wise or probabilistically.
+    """
+
+    temperatures = np.asarray(temp, dtype=float)
+    damage = delta1 * temperatures + delta2 * temperatures**2
+
+    if use_threshold:
+        amplify = 1.0 + threshold_scale * np.maximum(
+            0.0, temperatures - threshold_temperature
+        ) ** threshold_power
+        damage = damage * amplify
+
+    if use_saturation:
+        positive = np.maximum(0.0, damage)
+        if saturation_mode == "rational":
+            with np.errstate(divide="ignore", invalid="ignore"):
+                scaled = np.divide(
+                    positive,
+                    1.0 + positive,
+                    out=np.zeros_like(positive),
+                    where=positive >= 0.0,
+                )
+            damage = max_fraction * scaled
+        elif saturation_mode == "clamp":
+            damage = np.clip(damage, 0.0, max_fraction)
+        else:
+            raise ValueError("saturation_mode must be 'rational' or 'clamp'")
+
+    if use_catastrophic:
+        if disaster_mode == "step":
+            extra = np.where(temperatures >= catastrophic_temperature, disaster_fraction, 0.0)
+        elif disaster_mode == "prob":
+            exceed = np.maximum(0.0, temperatures - catastrophic_temperature)
+            extra = (1.0 - np.exp(-disaster_gamma * exceed)) * disaster_fraction
+        else:
+            raise ValueError("disaster_mode must be 'prob' or 'step'")
+        damage = damage + extra
+
+    # Always cap to max_fraction to avoid >100% GDP losses.
+    damage = np.minimum(damage, max_fraction)
+    return damage
 
 
 def compute_damages(

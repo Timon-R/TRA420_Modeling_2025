@@ -121,3 +121,8 @@ All runtime settings live in `config.yaml`.
     - `scaling_factors_file`: CSV with pattern scaling coefficients (°C per °C global, % precipitation per °C global) for each region.
     - `climate_scenarios`: which climate scenario outputs from the climate module to process (`all` or list of IDs).
     - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only scenarios processed by the climate module are valid here.
+- `economic_module`
+  - Computes SCC by combining temperature, emission, and GDP series.
+  - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.
+  - `damage_function` now supports optional threshold amplification, smooth saturation, and catastrophic add-ons in addition to the DICE quadratic terms (`delta1`, `delta2`). Tune behaviour via keys such as `use_threshold`, `threshold_temperature`, `use_saturation`, `max_fraction`, `use_catastrophic`, and related parameters (see `config.yaml`).
+  - Temperature CSVs export a `climate_scenario` column; the SCC runner reads it to select the matching SSP GDP/population series from `gdp_population_directory` (workbooks `GDP_SSP1_5.xlsx` and `POP_SSP1_5.xlsx`). Set `gdp_series` to a custom CSV only when overriding the SSP datasets.

@@ -161,7 +161,10 @@ economic_module:
   # Folder receiving SCC summary, detail, and per-year CSVs.
   output_directory: results/economic
   # GDP (and optional population) time series with columns: year, gdp_trillion_usd [, population_million].
-  gdp_series: data/gdp_dummy.csv
+  # Provide a CSV to override the SSP-derived data or leave null to rely on the directory below.
+  gdp_series: null
+  # Directory containing SSP GDP/Population datasets (GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx).
+  gdp_population_directory: data/GDP_and_Population_data
   # Absolute or anomaly temperature pathways per scenario (°C). Keys must match emission_series.
   # Use the climate-module output CSVs (temperature_baseline/temperature_adjusted columns).
   temperature_series:
@@ -185,6 +188,22 @@ economic_module:
   emission_column: delta
   # Unit converter applied to emission_column (1e6 converts Mt ➝ tonnes of CO₂).
   emission_to_tonnes: 1000000.0
+  # Damage function configuration for DICE-style quadratic damages.
+  damage_function:
+    delta1: 0.0
+    delta2: 0.002
+    use_threshold: false        # true to amplify damages past the threshold temperature.
+    threshold_temperature: 3.0  # °C at which threshold amplification starts.
+    threshold_scale: 0.2        # Multiplier applied to exceedance when threshold is enabled.
+    threshold_power: 2.0        # Power applied to the exceedance term.
+    use_saturation: false       # true to use a smooth rational saturation curve.
+    max_fraction: 0.99          # Maximum GDP loss fraction (also used for final clamp).
+    saturation_mode: rational   # 'rational' or 'clamp' when saturation is enabled.
+    use_catastrophic: false     # true to add catastrophe risk beyond catastrophic_temperature.
+    catastrophic_temperature: 5.0  # °C at which catastrophe risk begins.
+    disaster_fraction: 0.75     # Fractional GDP loss when catastrophe occurs.
+    disaster_gamma: 1.0         # Steepness of probabilistic catastrophe response.
+    disaster_mode: prob         # 'prob' (exponential) or 'step' catastrophe behaviour.
   # Discounting configurations. Set run: all, or provide an explicit list of method identifiers.
   methods:
     run: all

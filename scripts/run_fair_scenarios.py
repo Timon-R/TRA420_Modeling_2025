@@ -222,7 +222,7 @@ def build_scenarios() -> list[ScenarioSpec]:
     return specs
 
 
-def _write_csv(label: str, result) -> None:
+def _write_csv(label: str, climate_scenario: str, result) -> None:
     years = result.years
     mask = _sampling_mask(years)
     df = pd.DataFrame(
@@ -231,6 +231,7 @@ def _write_csv(label: str, result) -> None:
             "temperature_baseline": result.baseline[mask],
             "temperature_adjusted": result.adjusted[mask],
             "temperature_delta": result.delta[mask],
+            "climate_scenario": climate_scenario,
         }
     )
     df.to_csv(OUTPUT_DIR / f"{label}.csv", index=False)
@@ -286,10 +287,12 @@ def _timeseries_adjustment(rel_path: Path):
 
 
 def main() -> None:
-    results = run_scenarios(build_scenarios())
-    for label, result in results.items():
-        _write_csv(label, result)
-        _print_summary(label, result)
+    specs = build_scenarios()
+    results = run_scenarios(specs)
+    for spec in specs:
+        result = results[spec.label]
+        _write_csv(spec.label, spec.scenario, result)
+        _print_summary(spec.label, result)
 
 
 if __name__ == "__main__":
