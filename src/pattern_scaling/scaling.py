@@ -77,7 +77,9 @@ def get_scaling_factors(config: Dict[str, Any]) -> pd.DataFrame:
     return filtered
 
 
-def _detect_scenario_prefix(frame: pd.DataFrame, scenario_prefixes: set[str], filename: str) -> str | None:
+def _detect_scenario_prefix(
+    frame: pd.DataFrame, scenario_prefixes: set[str], filename: str
+) -> str | None:
     if "climate_scenario" in frame.columns:
         values = frame["climate_scenario"].dropna().astype(str).str.lower().unique()
         if values.size:
@@ -133,7 +135,9 @@ def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None
                     "temperature_adjusted": frame["temperature_adjusted"] * factor,
                 }
             )
-            scaled["temperature_delta"] = scaled["temperature_adjusted"] - scaled["temperature_baseline"]
+            scaled["temperature_delta"] = (
+                scaled["temperature_adjusted"] - scaled["temperature_baseline"]
+            )
             if "climate_scenario" in frame.columns:
                 scaled["climate_scenario"] = frame["climate_scenario"]
             scaled["iso3"] = country

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Literal
-import re
+from typing import Callable, Iterable, Literal, Mapping
 
 import numpy as np
 import pandas as pd
@@ -24,9 +24,7 @@ def _column(prefix: str, scenario: str) -> str:
     return f"{prefix}_{_safe_key(scenario)}"
 
 
-def _extract_climate_scenarios(
-    temperature_frames: Mapping[str, pd.DataFrame]
-) -> dict[str, str]:
+def _extract_climate_scenarios(temperature_frames: Mapping[str, pd.DataFrame]) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for label, frame in temperature_frames.items():
         if "climate_scenario" not in frame.columns:
@@ -54,7 +52,8 @@ def _load_ssp_table(path: Path, key_column: str, key: str) -> pd.Series:
         df = pd.read_excel(path)
     except ImportError as exc:  # pragma: no cover - dependency hint
         raise ImportError(
-            "Reading SSP workbooks requires 'openpyxl'. Install it or provide a CSV override via gdp_series."
+            "Reading SSP workbooks requires 'openpyxl'. Install it or provide a "
+            "CSV override via gdp_series."
         ) from exc
     if key_column not in df.columns:
         raise ValueError(f"Expected column '{key_column}' in {path.name}.")
@@ -73,7 +72,9 @@ def _load_ssp_economic_data(ssp_family: str, directory: Path) -> tuple[pd.Series
     if not gdp_path.exists():
         raise FileNotFoundError(f"Missing GDP dataset: {gdp_path}")
 
-    gdp_series = _load_ssp_table(gdp_path, "GDP", ssp_family) / 1000.0  # convert billions to trillions
+    gdp_series = (
+        _load_ssp_table(gdp_path, "GDP", ssp_family) / 1000.0
+    )  # convert billions to trillions
 
     population_series: pd.Series | None = None
     if pop_path.exists():
@@ -114,7 +115,9 @@ class EconomicInputs:
             raise ValueError("population_million must match the length of years.")
         for name, temps in self.temperature_scenarios_c.items():
             if len(temps) != length:
-                raise ValueError(f"Temperature series '{name}' does not match the year vector length.")
+                raise ValueError(
+                    f"Temperature series '{name}' does not match the year vector length."
+                )
         for name, emissions in self.emission_scenarios_tco2.items():
             if len(emissions) != length:
                 raise ValueError(f"Emission series '{name}' does not match the year vector length.")
@@ -190,7 +193,8 @@ class EconomicInputs:
         if gdp_population_directory is not None:
             if not climate_scenarios:
                 raise ValueError(
-                    "Temperature CSVs must include 'climate_scenario' to determine SSP-specific GDP."
+                    "Temperature CSVs must include 'climate_scenario' to determine "
+                    "SSP-specific GDP."
                 )
             families = {_infer_ssp_family(climate_id) for climate_id in climate_scenarios.values()}
             if len(families) != 1:
@@ -235,14 +239,17 @@ class EconomicInputs:
         gdp_series = gdp_frame.set_index("year").loc[years, gdp_column].to_numpy(dtype=float)
         population = None
         if population_column in gdp_frame:
-            population = gdp_frame.set_index("year").loc[years, population_column].to_numpy(dtype=float)
+            population = (
+                gdp_frame.set_index("year").loc[years, population_column].to_numpy(dtype=float)
+            )
 
         temperature_series = {
             label: frame.set_index("year").loc[years, "temperature_c"].to_numpy(dtype=float)
             for label, frame in temp_frames.items()
         }
         emission_series = {
-            label: frame.set_index("year").loc[years, "emission_raw"].to_numpy(dtype=float) * emission_to_tonnes
+            label: frame.set_index("year").loc[years, "emission_raw"].to_numpy(dtype=float)
+            * emission_to_tonnes
             for label, frame in emission_frames.items()
         }
 
@@ -357,9 +364,11 @@ def damage_dice(
     damage = delta1 * temperatures + delta2 * temperatures**2
 
     if use_threshold:
-        amplify = 1.0 + threshold_scale * np.maximum(
-            0.0, temperatures - threshold_temperature
-        ) ** threshold_power
+        amplify = (
+            1.0
+            + threshold_scale
+            * np.maximum(0.0, temperatures - threshold_temperature) ** threshold_power
+        )
         damage = damage * amplify
 
     if use_saturation:
@@ -483,11 +492,15 @@ def _compute_consumption_growth(
     gdp_usd = inputs.gdp_trillion_usd * 1e12
     population = np.asarray(inputs.population_million, dtype=float) * 1e6
     consumption = np.maximum(gdp_usd - reference_damage_usd, 0.0)
-    consumption_per_capita = np.divide(consumption, population, out=np.zeros_like(consumption), where=population > 0)
+    consumption_per_capita = np.divide(
+        consumption, population, out=np.zeros_like(consumption), where=population > 0
+    )
 
     growth = np.full_like(consumption_per_capita, fill_value=np.nan, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        growth[1:] = (consumption_per_capita[1:] - consumption_per_capita[:-1]) / consumption_per_capita[:-1]
+        growth[1:] = (
+            consumption_per_capita[1:] - consumption_per_capita[:-1]
+        ) / consumption_per_capita[:-1]
     return consumption_per_capita, growth
 
 
@@ -624,7 +637,9 @@ def compute_scc_ramsey_discount(
     )
 
     reference_col = _column("damage_usd", reference)
-    consumption_pc, growth = _compute_consumption_growth(inputs, damage_df[reference_col].to_numpy())
+    consumption_pc, growth = _compute_consumption_growth(
+        inputs, damage_df[reference_col].to_numpy()
+    )
 
     factors = _ramsey_discount_factors(
         damage_df["year"].to_numpy(),

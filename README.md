@@ -8,16 +8,16 @@ temperature responses, and evaluating local/global impact metrics such as the So
 ## Repository Structure
 
 - `src/`
+  - `calc_emissions/` — converts electricity demand and mix into emission deltas.
   - `climate_module/` — FaIR wrappers and scenario tools.
-  - `pattern_scaling/` — converts global climate responses into country-level projections via pattern scaling.
-  - `calc_emissions/`- Converting electricity demand and mix into emission difference from baseline.
-  - `pattern_scaling/` — local temperature changes from global means.
-  - *(planned)* `impacts/`, `ui/`, `common/` packages that
-    will divide the workflow into focused modules as they are implemented.
+  - `economic_module/` — SCC utilities (damages, discounting, reporting).
+  - `pattern_scaling/` — pattern-scaling of global responses to country trajectories.
+  - *(planned)* `impacts/`, `ui/`, `common/` packages that will divide the workflow into focused modules as they arrive.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
 - `data/` — input datasets (raw and processed). Keep large files out of version control when possible.
 - `resources/` — emission-difference scenario folders (e.g. `<scenario>/co2.csv`, Mt CO₂/yr); used by the climate runner and ignored by Git.
 - `results/` — generated outputs like climate CSVs (ignored by Git).
+- `tests/` — pytest suite covering emissions, climate, economic, and pattern-scaling modules.
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
 - `pyproject.toml` — project metadata plus Ruff lint/format configuration.
@@ -41,7 +41,23 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 ## Running the Pipeline
 
-Implementation is in progress.
+Typical workflow (driven by `config.yaml`):
+
+1. **Emissions** – `python scripts/run_calc_emissions.py` (optional; prepares `resources/<scenario>/co2.csv`).
+2. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column.
+3. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
+4. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
+
+## Testing
+
+Install development dependencies and run the pytest suite from the project root:
+
+```bash
+pip install -e '.[dev]'
+python -m pytest
+```
+
+Individual modules can be exercised via `python -m pytest tests/test_calc_emissions.py` (or similar) when iterating quickly. Continuous integration expects the full suite to pass before changes are submitted.
 
 ## Development Guidelines
 
@@ -116,19 +132,13 @@ All runtime settings live in `config.yaml`.
     - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only `co2.csv` feeds FaIR; other pollutant files are optional analytics inputs.
 
 - `pattern_scaling`
-  - Consumes global climate CSVs and applies country-specific scaling factors.
+  - Consumes global climate CSVs and applies country-specific pattern-scaling coefficients.
   - Key options:
     - `output_directory`: destination for per-country scaled results.
     - `scaling_factors_file`: path to the scaling table (e.g., `data/cmip6_pattern_scaling_by_country_mean.csv`).
-    - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`).
+    - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`, `pop.2100`).
     - `countries`: ISO3 codes to generate outputs for.
-    - Uses the `climate_module` scenario definitions to match scaling factors (first four characters of the scenario `id`).
-  - Calculates local temperature and precipitation changes from global means using pattern scaling.
-  - Key options:
-    - `output_directory`: where local climate CSVs are written (`results/pattern_scaling` by default).
-    - `scaling_factors_file`: CSV with pattern scaling coefficients (°C per °C global, % precipitation per °C global) for each region.
-    - `climate_scenarios`: which climate scenario outputs from the climate module to process (`all` or list of IDs).
-    - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only scenarios processed by the climate module are valid here.
+  - Matches climate scenarios using the first four characters of each `climate_module.climate_scenarios.definitions[*].id` or the `climate_scenario` column injected into climate CSVs.
 - `economic_module`
   - Computes SCC by combining temperature, emission, and GDP series.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.

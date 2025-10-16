@@ -8,9 +8,6 @@ import pytest
 from calc_emissions.calculator import (
     EmissionScenarioResult,
     _generate_years,
-    _load_emission_factors,
-    _resolve_demand_series,
-    _resolve_mix_shares,
     _values_to_series,
     calculate_emissions,
     run_from_config,

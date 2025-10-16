@@ -1,17 +1,18 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("fair")
-
-from climate_module import TemperatureResult
-from climate_module.scenario_runner import (
-    DEFAULT_TIME_CONFIG,
-    ScenarioSpec,
-    _build_timepoints,
-    _prepare_adjustments,
-    run_scenarios,
-    step_change,
-)
+try:  # pragma: no cover - handled via pytest skip
+    from climate_module import TemperatureResult
+    from climate_module.scenario_runner import (
+        DEFAULT_TIME_CONFIG,
+        ScenarioSpec,
+        _build_timepoints,
+        _prepare_adjustments,
+        run_scenarios,
+        step_change,
+    )
+except ImportError:
+    pytest.skip("FaIR dependency not available.", allow_module_level=True)
 
 
 def test_step_change_returns_callable_with_expected_shape():
@@ -51,7 +52,9 @@ def test_run_scenarios_invokes_compute_temperature_change(monkeypatch: pytest.Mo
             adjusted=np.ones(2),
         )
 
-    monkeypatch.setattr("climate_module.scenario_runner.compute_temperature_change", fake_compute_temperature_change)
+    monkeypatch.setattr(
+        "climate_module.scenario_runner.compute_temperature_change", fake_compute_temperature_change
+    )
 
     spec = ScenarioSpec(
         label="case",

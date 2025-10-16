@@ -42,7 +42,9 @@ def sample_inputs() -> EconomicInputs:
 
 
 def test_compute_damages_returns_expected_columns(sample_inputs: EconomicInputs):
-    df = compute_damages(sample_inputs, scenarios=["policy"], damage_func=damage_dice, damage_kwargs={"delta2": 0.0})
+    df = compute_damages(
+        sample_inputs, scenarios=["policy"], damage_func=damage_dice, damage_kwargs={"delta2": 0.0}
+    )
     assert "damage_usd_policy" in df.columns
     damages = df["damage_usd_policy"].to_numpy()
     expected = np.zeros_like(damages)

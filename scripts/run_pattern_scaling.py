@@ -30,7 +30,8 @@ The CSV referenced by ``scaling_factors_file`` must contain at minimum:
 - ``name`` – descriptive country name
 - ``iso3`` – three-letter ISO country code
 - ``scenario`` – scenario identifier (first four characters, e.g., ``rcp4``)
-- ``patterns.<weighting>`` – area, population, or gdp-weighted scaling factor for years 2000 and 2100
+- ``patterns.<weighting>`` – area, population, or GDP-weighted scaling factor
+  for years 2000 and 2100
 
 Behavior
 --------

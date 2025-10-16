@@ -13,11 +13,14 @@ python scripts/run_scc.py --method all
 
 Inputs
 ------
-- Temperature CSVs must expose ``year`` and the column named via ``--temperature-column`` (default ``temperature_adjusted``).
-- Emission CSVs supply annual CO₂ deltas with ``year`` plus ``--emission-column`` (default ``delta``);
-  values are converted to tonnes using ``--emission-unit-multiplier``.
-- Temperature CSVs exported by the climate module now include ``climate_scenario`` to signal which
-  SSP family should drive GDP/population selection.
+- Temperature CSVs must expose ``year`` and the column named via
+  ``--temperature-column`` (default ``temperature_adjusted``).
+- Emission CSVs supply annual CO₂ deltas with ``year`` plus
+  ``--emission-column`` (default ``delta``); values are converted to tonnes
+  using ``--emission-unit-multiplier``.
+- Temperature CSVs exported by the climate module now include
+  ``climate_scenario`` to signal which SSP family should drive GDP/population
+  selection.
 - Scenario labels supplied for temperatures and emissions must match exactly.
 - Aggregation can be ``average`` (policy-wide USD/tCO₂) or ``per_year`` (time-varying SCC series).
 - Damage function parameters (DICE ``delta1`` / ``delta2`` and optional threshold, saturation,
@@ -33,7 +36,6 @@ The script loads GDP, temperature, and emission difference series, feeds them in
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 from typing import Iterable, Mapping, cast
 
@@ -41,10 +43,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
 from economic_module import EconomicInputs, SCCAggregation, compute_scc
+
+ROOT = Path(__file__).resolve().parents[1]
 
 AVAILABLE_METHODS = ["constant_discount", "ramsey_discount"]
 AVAILABLE_AGGREGATIONS: tuple[SCCAggregation, ...] = ("average", "per_year")
@@ -116,36 +117,57 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
     damage_disaster_mode_default = str(damage_cfg.get("disaster_mode", "prob")).lower()
 
     parser = argparse.ArgumentParser(
-        description="Calculate SCC for temperature/emission scenarios relative to a reference pathway.")
+        description=(
+            "Calculate SCC for temperature/emission scenarios relative to a " "reference pathway."
+        )
+    )
     parser.add_argument(
         "--temperature",
         action="append",
-        help="Temperature series specification as 'label=path/to.csv'. Provide at least two entries.",
+        help=(
+            "Temperature series specification as 'label=path/to.csv'. Provide at "
+            "least two entries."
+        ),
     )
     parser.add_argument(
         "--emission",
         action="append",
-        help="Emission delta series specification as 'label=path/to.csv'. Provide matching labels to temperature.",
+        help=(
+            "Emission delta series specification as 'label=path/to.csv'. Provide "
+            "matching labels to temperature."
+        ),
     )
     parser.add_argument(
         "--reference-scenario",
         default=cfg.get("reference_scenario"),
-        help="Scenario label treated as the reference/baseline (default from config or first listed).",
+        help=(
+            "Scenario label treated as the reference/baseline "
+            "(default from config or first listed)."
+        ),
     )
     parser.add_argument(
         "--scenario",
         action="append",
-        help="Scenario label to evaluate (repeat flag for multiple). Defaults to config evaluation list or all non-reference scenarios.",
+        help=(
+            "Scenario label to evaluate (repeat flag for multiple). Defaults to "
+            "config evaluation list or all non-reference scenarios."
+        ),
     )
     parser.add_argument(
         "--gdp-csv",
         default=gdp_default,
-        help="Optional override CSV with 'year', 'gdp_trillion_usd', and optionally 'population_million'.",
+        help=(
+            "Optional override CSV with 'year', 'gdp_trillion_usd', and "
+            "optionally 'population_million'."
+        ),
     )
     parser.add_argument(
         "--gdp-population-directory",
         default=gdp_pop_dir_default,
-        help="Directory containing SSP GDP/Population workbooks (GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx).",
+        help=(
+            "Directory containing SSP GDP/Population workbooks "
+            "(GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx)."
+        ),
     )
     parser.add_argument(
         "--base-year",
@@ -157,7 +179,10 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
         "--method",
         action="append",
         choices=AVAILABLE_METHODS + ["all"],
-        help="Discounting approach: constant rate or Ramsey rule. Use multiple --method flags or 'all'.",
+        help=(
+            "Discounting approach: constant rate or Ramsey rule. Use multiple "
+            "--method flags or 'all'."
+        ),
     )
     parser.add_argument(
         "--aggregation",
@@ -168,7 +193,9 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
     parser.add_argument(
         "--discount-rate",
         type=float,
-        default=float(cfg.get("methods", {}).get("constant_discount", {}).get("discount_rate", 0.03)),
+        default=float(
+            cfg.get("methods", {}).get("constant_discount", {}).get("discount_rate", 0.03)
+        ),
         help="Constant annual discount rate (decimal).",
     )
     parser.add_argument(
@@ -187,7 +214,10 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
         "--add-tco2",
         type=float,
         default=cfg.get("add_tco2"),
-        help="Optional override for total emission delta (t CO₂). If omitted, derived from emission series.",
+        help=(
+            "Optional override for total emission delta (t CO₂). If omitted, "
+            "derived from emission series."
+        ),
     )
     parser.add_argument(
         "--temperature-column",
@@ -367,7 +397,9 @@ def _select_reference(args: argparse.Namespace, cfg: dict, available: Iterable[s
     return available[0]
 
 
-def _select_targets(args: argparse.Namespace, cfg: dict, available: Iterable[str], reference: str) -> list[str]:
+def _select_targets(
+    args: argparse.Namespace, cfg: dict, available: Iterable[str], reference: str
+) -> list[str]:
     available_set = set(available)
     available_set.discard(reference)
     if not available_set:
@@ -405,8 +437,12 @@ def main() -> None:
         parser.error("No valid SCC methods selected.")
 
     try:
-        temperature_sources = _collect_sources(args.temperature, config.get("temperature_series"), minimum=2, label="temperature")
-        emission_sources = _collect_sources(args.emission, config.get("emission_series"), minimum=2, label="emission")
+        temperature_sources = _collect_sources(
+            args.temperature, config.get("temperature_series"), minimum=2, label="temperature"
+        )
+        emission_sources = _collect_sources(
+            args.emission, config.get("emission_series"), minimum=2, label="emission"
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -420,9 +456,7 @@ def main() -> None:
 
     gdp_path = _resolve_path(args.gdp_csv) if args.gdp_csv else None
     gdp_population_directory = (
-        _resolve_path(args.gdp_population_directory)
-        if args.gdp_population_directory
-        else None
+        _resolve_path(args.gdp_population_directory) if args.gdp_population_directory else None
     )
 
     inputs = EconomicInputs.from_csv(
@@ -491,7 +525,9 @@ def main() -> None:
                     "scc_usd_per_tco2": result.scc_usd_per_tco2,
                     "base_year": result.base_year,
                     "total_delta_emissions_tco2": result.add_tco2,
-                    "discount_rate": args.discount_rate if method == "constant_discount" else np.nan,
+                    "discount_rate": args.discount_rate
+                    if method == "constant_discount"
+                    else np.nan,
                     "rho": args.rho if method == "ramsey_discount" else np.nan,
                     "eta": args.eta if method == "ramsey_discount" else np.nan,
                 }
