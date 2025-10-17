@@ -106,30 +106,23 @@ calc_emissions:
           biomass: 0.06
 
 climate_module:
-  # Directory for climate results (relative to repository root).
-  output_directory: results/climate
-  # Copy of temperature outputs used as shared resources across modules.
-  resource_directory: resources/climate
-  # Sampling option for CSV outputs: 'default' (5-year steps to 2050, then 10-year) or 'full'.
-  sample_years_option: default
-  # Folder containing <scenario>_emission_difference.csv files (delta in Mt CO₂/yr; negative reduces emissions).
-  emission_timeseries_directory: resources
+  output_directory: results/climate  # Directory for climate results (relative to repository root).
+  resource_directory: resources/climate  # Copy of temperature outputs used as shared resources across modules.
+  sample_years_option: default  # 'default' (5-year steps to 2050, then 10-year) or 'full'.
+  emission_timeseries_directory: resources  # Folder containing <scenario>_emission_difference.csv (Mt CO₂/yr; negative reduces emissions).
 
   parameters:
-    # Simulation time grid (extend end_year for far-future projections).
-    start_year: 1750
+    start_year: 1750  # Simulation time grid (extend end_year for far-future projections).
     end_year: 2100
     timestep: 1.0  # Years per step; 1.0 = annual, 0.25 = quarterly (slower runtime).
 
-    # Climate presets and overrides (values applied to all configs unless overridden per scenario).
     climate_setup: ar6  # Options include 'ar6' (default three-layer) and 'two_box'.
     deep_ocean_efficacy: 1.28  # Plausible range 0.5–1.5 (higher slows deep-ocean uptake).
     forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.
     equilibrium_climate_sensitivity: 3.0  # °C per CO₂ doubling; likely range 2.0–5.0.
 
   climate_scenarios:
-    # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
-    run: all
+    run: all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
     definitions:
       - id: ssp119  # Strong mitigation SSP (aggressive climate action)
         label: ssp119
@@ -142,13 +135,11 @@ climate_module:
         adjustment_specie: CO2 FFI
 
   emission_scenarios:
-    # Emission scenarios to load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
-    run: all
+    run: all  # Load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
 
 pattern_scaling:
   output_directory: results/climate_scaled
-  scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv
-  # Columns: name, iso3, continent, scenario, patterns.* where * indicates how the pattern scaling is weighted
+  scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv  # Columns: name, iso3, continent, scenario, patterns.* (weighting basis)
   scaling_weighting: area  # Options: gdp.2000, gdp.2100, pop.2000, pop.2100, area (default)
   countries: # List of ISO3 codes
     - ALB
@@ -159,59 +150,41 @@ pattern_scaling:
     - MNE
     
 economic_module:
-  # Folder receiving SCC summary, detail, and per-year CSVs.
-  output_directory: results/economic
-  # GDP (and optional population) time series with columns: year, gdp_trillion_usd [, population_million].
-  # Provide a CSV to override the SSP-derived data or leave null to rely on the directory below.
-  gdp_series: null
-  # Directory containing SSP GDP/Population datasets (GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx).
-  gdp_population_directory: data/GDP_and_Population_data
-  # Absolute or anomaly temperature pathways per scenario (°C). Keys must match emission_series.
-  # Use the climate-module output CSVs (temperature_baseline/temperature_adjusted columns).
-  temperature_series:
+  output_directory: results/economic  # Folder receiving SCC summary, detail, and per-year CSVs.
+  gdp_series: null  # Optional override CSV with columns: year, gdp_trillion_usd [, population_million].
+  gdp_population_directory: data/GDP_and_Population_data  # Prefers long CSVs (SSP_gdp_long_2020ppp.csv, SSP_population_long.csv); falls back to Excel.
+  temperature_series:  # Absolute/anomaly °C per scenario; keys must match emission_series (use climate-module outputs).
     baseline: resources/climate/energy_mix_B_ssp245.csv
     policy: resources/climate/energy_mix_A_ssp245.csv
-  # Annual CO₂ deltas per scenario. CSVs must expose 'year' plus the column named in emission_column.
-  # Use the FaIR-compatible output in resources/<scenario>/co2.csv.
-  emission_series:
+  emission_series:  # Annual CO₂ deltas per scenario (use resources/<scenario>/co2.csv with 'delta' column).
     baseline: resources/energy_mix_B/co2.csv
     policy: resources/energy_mix_A/co2.csv
-  # Scenario label treated as the baseline when computing damage differences.
-  reference_scenario: baseline
-  # Additional scenarios (besides the reference) evaluated by default.
-  evaluation_scenarios:
+  reference_scenario: baseline  # Baseline label for damage differences.
+  evaluation_scenarios:  # Additional scenarios evaluated by default.
     - policy
-  # Present-value reference year for discounting (must exist in the GDP/temperature grids).
-  base_year: 2025
-  # SCC aggregation style: 'average' (policy-wide USD/tCO₂) or 'per_year' (report time series).
-  aggregation: average
-  # Column name in emission CSVs (FaIR export uses 'delta' for Mt CO₂/yr differences).
-  emission_column: delta
-  # Unit converter applied to emission_column (1e6 converts Mt ➝ tonnes of CO₂).
-  emission_to_tonnes: 1000000.0
-  # Damage function configuration for DICE-style quadratic damages.
-  damage_function:
+  base_year: 2025  # Present-value reference year for discounting (must exist in GDP/temperature grids).
+  aggregation: average  # 'average' (USD/tCO₂) or 'per_year' (time series).
+  emission_column: delta  # Column name in emission CSVs (FaIR export uses 'delta' for Mt CO₂/yr deltas).
+  emission_to_tonnes: 1000000.0  # Unit converter for emission_column (1e6 converts Mt → tonnes CO₂).
+  damage_function:  # DICE-style quadratic damages configuration.
     delta1: 0.0
     delta2: 0.002
-    use_threshold: false        # true to amplify damages past the threshold temperature.
+    use_threshold: false  # true to amplify damages past the threshold temperature.
     threshold_temperature: 3.0  # °C at which threshold amplification starts.
-    threshold_scale: 0.2        # Multiplier applied to exceedance when threshold is enabled.
-    threshold_power: 2.0        # Power applied to the exceedance term.
-    use_saturation: false       # true to use a smooth rational saturation curve.
-    max_fraction: 0.99          # Maximum GDP loss fraction (also used for final clamp).
-    saturation_mode: rational   # 'rational' or 'clamp' when saturation is enabled.
-    use_catastrophic: false     # true to add catastrophe risk beyond catastrophic_temperature.
+    threshold_scale: 0.2  # Multiplier applied to exceedance when threshold is enabled.
+    threshold_power: 2.0  # Power applied to the exceedance term.
+    use_saturation: false  # true to use a smooth rational saturation curve.
+    max_fraction: 0.99  # Maximum GDP loss fraction (also used for final clamp).
+    saturation_mode: rational  # 'rational' or 'clamp' when saturation is enabled.
+    use_catastrophic: false  # true to add catastrophe risk beyond catastrophic_temperature.
     catastrophic_temperature: 5.0  # °C at which catastrophe risk begins.
-    disaster_fraction: 0.75     # Fractional GDP loss when catastrophe occurs.
-    disaster_gamma: 1.0         # Steepness of probabilistic catastrophe response.
-    disaster_mode: prob         # 'prob' (exponential) or 'step' catastrophe behaviour.
-  # Discounting configurations. Set run: all, or provide an explicit list of method identifiers.
-  methods:
-    run: all
-    # Fixed annual discount rate r; SCC uses 1/(1+r)^{t-base_year}.
-    constant_discount:
+    disaster_fraction: 0.75  # Fractional GDP loss when catastrophe occurs.
+    disaster_gamma: 1.0  # Steepness of probabilistic catastrophe response.
+    disaster_mode: prob  # 'prob' (exponential) or 'step' catastrophe behaviour.
+  methods:  # Discounting configurations ('all' runs both methods).
+    run: ramsey_discount
+    constant_discount:  # Fixed annual discount rate r; SCC uses 1/(1+r)^{t-base_year}.
       discount_rate: 0.03
-    # Ramsey rule parameters: rho = pure time preference, eta = marginal utility elasticity.
-    ramsey_discount:
+    ramsey_discount:  # Ramsey: rho = pure time preference, eta = utility elasticity.
       rho: 0.005
       eta: 1.0

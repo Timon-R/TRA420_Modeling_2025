@@ -67,10 +67,78 @@ def _load_ssp_table(path: Path, key_column: str, key: str) -> pd.Series:
 
 
 def _load_ssp_economic_data(ssp_family: str, directory: Path) -> tuple[pd.Series, pd.Series | None]:
+    """Load SSP GDP and population series for the requested family.
+
+    Preference order:
+    1) Long-format CSVs with 2020 PPP GDP and population in millions:
+       - ``SSP_gdp_long_2020ppp.csv`` expects columns: scenario, year, gdp_billion_ppp_2020
+       - ``SSP_population_long.csv`` expects columns: scenario, year, population_millions
+    2) Legacy Excel workbooks ``GDP_SSP1_5.xlsx`` and ``POP_SSP1_5.xlsx``.
+
+    Returns GDP in trillions of USD (PPP-2020) and population in millions.
+    """
+
+    family_key = ssp_family.upper().strip()
+
+    # Try CSV sources first
+    gdp_csv = directory / "SSP_gdp_long_2020ppp.csv"
+    pop_csv = directory / "SSP_population_long.csv"
+    if gdp_csv.exists():
+        gdp_df = pd.read_csv(gdp_csv, comment="#")
+        if not {"scenario", "year"}.issubset(gdp_df.columns):
+            raise ValueError(f"{gdp_csv.name} must contain 'scenario' and 'year' columns.")
+        # Choose correct GDP column (prefer 2020 PPP). Fall back to 2010 PPP if needed.
+        gdp_col = None
+        if "gdp_billion_ppp_2020" in gdp_df.columns:
+            gdp_col = "gdp_billion_ppp_2020"
+        elif "gdp_billion_ppp_2010" in gdp_df.columns:
+            gdp_col = "gdp_billion_ppp_2010"
+        else:
+            raise ValueError(
+                f"{gdp_csv.name} missing expected GDP column "
+                "('gdp_billion_ppp_2020' or 'gdp_billion_ppp_2010')."
+            )
+        gdp_sel = gdp_df[gdp_df["scenario"].str.upper() == family_key][["year", gdp_col]].copy()
+        if gdp_sel.empty:
+            raise ValueError(f"Scenario '{family_key}' not found in {gdp_csv.name}.")
+        gdp_sel["year"] = gdp_sel["year"].astype(int)
+        gdp_series = (
+            gdp_sel.set_index("year")[gdp_col].astype(float) / 1000.0
+        )  # billions → trillions
+
+        population_series: pd.Series | None = None
+        if pop_csv.exists():
+            pop_df = pd.read_csv(pop_csv, comment="#")
+            if not {"scenario", "year"}.issubset(pop_df.columns):
+                raise ValueError(f"{pop_csv.name} must contain 'scenario' and 'year' columns.")
+            # Prefer 'population_millions'; fall back to 'population' (persons)
+            pop_col = None
+            if "population_millions" in pop_df.columns:
+                pop_col = "population_millions"
+                scale = 1.0
+            elif "population" in pop_df.columns:
+                pop_col = "population"
+                scale = 1.0 / 1e6  # persons → millions
+            else:
+                raise ValueError(
+                    f"{pop_csv.name} missing expected population column "
+                    "('population_millions' or 'population')."
+                )
+            pop_sel = pop_df[pop_df["scenario"].str.upper() == family_key][["year", pop_col]].copy()
+            if not pop_sel.empty:
+                pop_sel["year"] = pop_sel["year"].astype(int)
+                population_series = pop_sel.set_index("year")[pop_col].astype(float) * scale
+
+        return (
+            gdp_series.sort_index(),
+            None if population_series is None else population_series.sort_index(),
+        )
+
+    # Fallback to legacy Excel workbooks
     gdp_path = directory / "GDP_SSP1_5.xlsx"
     pop_path = directory / "POP_SSP1_5.xlsx"
     if not gdp_path.exists():
-        raise FileNotFoundError(f"Missing GDP dataset: {gdp_path}")
+        raise FileNotFoundError(f"Missing GDP dataset: {gdp_csv if gdp_csv.exists() else gdp_path}")
 
     gdp_series = (
         _load_ssp_table(gdp_path, "GDP", ssp_family) / 1000.0
