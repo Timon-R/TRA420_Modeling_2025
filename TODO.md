@@ -5,14 +5,17 @@ A checklist of tasks, features, and improvements for this project.
 ## General Todos
 
 - [ ] List of parameters for interface group
-- [ ] 33% Progress report _(due: 2025-10-06)_
+- [x] 33% Progress report _(due: 2025-10-06)_
 
 ## Emissions
 
-- [ ] Look through NEPCs of West Balkans _(Max, Elias)_
+- [x] Look through NEPCs of West Balkans _(Max, Elias)_
 - [x] Build emissions module that takes time series for electricity demand and electricity mixes and computes CO2, NOx and other emissions
 - [ ] Implement change in grid mix over time (?)
-- [ ] Insert correct values for emission factors. Change over time ?
+- [x] Insert correct values for emission factors. Change over time ?
+    - So far no changes over time
+- [ ] Seperate config and input data into different files
+- [ ] Put country wise emission differences into 'Results' folder, and only summed emissions for the region into resources folder. Or just 'Total' folder into resources
 
 ## Climate emulator
 
