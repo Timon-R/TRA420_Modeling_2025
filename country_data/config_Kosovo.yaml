@@ -52,7 +52,7 @@ calc_emissions:
         wind: 0.03
         solar: 0.02
   baseline:
-    demand_scenario: baseline
+    demand_scenario: reference
     mix_scenario: reference
   scenarios:
     - name: scenario_1_lower_bound

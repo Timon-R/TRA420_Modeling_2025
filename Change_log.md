@@ -37,6 +37,15 @@
     - 2100 currently reproduces the value from 2027
 
   # Commit 3
+  - Repaired column names in emission_factor csv's to match code
+
+  # Commit 4
+  - Fixed calculator to work with new config structure:
+    - Changed `calculator.py` line 69 from `module_cfg.get("reference", {})` to `module_cfg.get("baseline", {})` to correctly read baseline configuration.
+    - Updated all country configs to use `demand_scenario: reference` instead of `demand_scenario: baseline` in baseline sections.
+    - Fixed Bosnia-Herzegovina config to reference correct emission factors filename: `emission_factors_Bosnia_Herzegowina.csv`.
+  - Verified all six countries (Albania, Bosnia-Herzegovina, Kosovo, North Macedonia, Serbia, Montenegro) run successfully and generate emissions outputs for all scenarios.
+
 
 
 
