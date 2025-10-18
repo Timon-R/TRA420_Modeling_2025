@@ -19,6 +19,12 @@
     - Renamed `product` column to `technology` and mapped product strings to technology keys (e.g., lignite->coal, photovoltaic->solar, wood->biomass, etc.).
     - Appended a `storage` technology row (empty numeric fields) to each file and replaced temporary 'NA' placeholders with empty cells for numeric compatibility.
 
+
+  ### Commit 5: Add all-countries emissions aggregator
+  - New script `scripts/run_calc_emissions_all.py` runs the emissions calculator for all country configs
+    and aggregates per-scenario deltas across countries.
+  - Aggregated outputs are written to `resources/All_countries/<scenario>/{co2,nox,sox,pm25,gwp100}.csv`.
+  - Updated `README.md` with usage instructions for single-country and all-countries runs.
   # Commit 2
   - Removed `calc_emission` input from `config.yaml` file 
   - Standardized country configs (Bosnia-Herzegovina, Kosovo, North_Macedonia, Serbia):
