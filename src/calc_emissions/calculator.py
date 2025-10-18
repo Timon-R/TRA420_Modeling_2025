@@ -93,7 +93,7 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
     results_dir = Path(module_cfg.get("results_directory", "results/emissions"))
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    results: dict[str, EmissionScenarioResult] = {}
+    results: dict[str, EmissionScenarioResult] = {"baseline": baseline}
     for scenario_cfg in module_cfg.get("scenarios", []):
         name = scenario_cfg.get("name")
         if not name:

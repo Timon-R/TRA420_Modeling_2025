@@ -92,7 +92,7 @@ def test_run_from_config_creates_outputs(tmp_path: Path, monkeypatch: pytest.Mon
     # run_from_config expects YAML; using json-compatible structure is valid for yaml.safe_load.
     results = run_from_config(config_path)
 
-    assert "policy" in results
+    assert {"baseline", "policy"} <= set(results.keys())
     output_file = root / "resources" / "policy" / "co2.csv"
     assert output_file.exists()
     csv = pd.read_csv(output_file)

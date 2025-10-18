@@ -148,6 +148,25 @@ pattern_scaling:
     - KOS # Kosovo, unofficially assigned ISO3 code
     - SRB
     - MNE
+
+air_pollution:
+  output_directory: results/air_pollution
+  concentration_measure: median  # Default concentration statistic to use when available.
+  concentration_fallback_order:  # Ordered fallback when the preferred measure is missing.
+    - median
+    - mean
+    - min
+    - max
+  scenarios: all  # 'all' or list of emission scenario names to process.
+  pollutants:
+    pm25:
+      stats_file: data/air_pollution/PM25_country_stats.csv
+      relative_risk: 1.08  # RR for a 10 µg/m³ change (log-linear model).
+      reference_delta: 10.0  # µg/m³ associated with the relative_risk value.
+    nox:
+      stats_file: data/air_pollution/NOx_country_stats.csv
+      relative_risk: 1.03
+      reference_delta: 10.0
     
 economic_module:
   output_directory: results/economic  # Folder receiving SCC summary, detail, and per-year CSVs.

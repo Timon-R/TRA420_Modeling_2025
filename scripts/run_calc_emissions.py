@@ -50,6 +50,8 @@ from calc_emissions import run_from_config  # noqa: E402
 def main() -> None:
     results = run_from_config()
     for name, result in results.items():
+        if name == "baseline":
+            continue
         print(f"\n=== {name} ===")
         print("ΔCO₂ (Mt/year) relative to baseline:")
         print(result.delta_mtco2.to_frame(name="delta_mtco2").to_string())

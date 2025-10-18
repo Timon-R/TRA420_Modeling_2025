@@ -10,6 +10,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
 - `src/`
   - `calc_emissions/` — converts electricity demand and mix into emission deltas.
   - `climate_module/` — FaIR wrappers and scenario tools.
+  - `air_pollution/` — maps non-CO₂ deltas to concentration-driven health impacts.
   - `economic_module/` — SCC utilities (damages, discounting, reporting).
   - `pattern_scaling/` — pattern-scaling of global responses to country trajectories.
   - *(planned)* `impacts/`, `ui/`, `common/` packages that will divide the workflow into focused modules as they arrive.
@@ -44,9 +45,10 @@ temperature responses, and evaluating local/global impact metrics such as the So
 Typical workflow (driven by `config.yaml`):
 
 1. **Emissions** – `python scripts/run_calc_emissions.py` (optional; prepares `resources/<scenario>/co2.csv`).
-2. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column.
-3. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
-4. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
+2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate mortality percentage changes.
+3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column.
+4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
+5. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
 
 ## Testing
 
@@ -139,6 +141,13 @@ All runtime settings live in `config.yaml`.
     - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`, `pop.2100`).
     - `countries`: ISO3 codes to generate outputs for.
   - Matches climate scenarios using the first four characters of each `climate_module.climate_scenarios.definitions[*].id` or the `climate_scenario` column injected into climate CSVs.
+- `air_pollution`
+  - Translates emission changes for PM₂.₅ and NOₓ into mortality percentage differences by scaling baseline concentrations with emission ratios.
+  - Key options:
+    - `output_directory`: where health-impact CSVs are written (`results/air_pollution` by default).
+    - `concentration_measure`: preferred statistic (`median`, `mean`, etc.); the module falls back through `concentration_fallback_order` if the field is missing in the data.
+    - `pollutants`: per-pollutant overrides (stats file, `relative_risk` or `beta`, reference concentration delta).
+    - `scenarios`: `all` or a list of emission scenario names to evaluate.
 - `economic_module`
   - Computes SCC by combining temperature, emission, and GDP series.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.
