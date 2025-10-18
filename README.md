@@ -141,13 +141,19 @@ All runtime settings live in `config.yaml`.
     - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`, `pop.2100`).
     - `countries`: ISO3 codes to generate outputs for.
   - Matches climate scenarios using the first four characters of each `climate_module.climate_scenarios.definitions[*].id` or the `climate_scenario` column injected into climate CSVs.
-- `air_pollution`
-  - Translates emission changes for PM₂.₅ and NOₓ into mortality percentage differences by scaling baseline concentrations with emission ratios.
-  - Key options:
-    - `output_directory`: where health-impact CSVs are written (`results/air_pollution` by default).
-    - `concentration_measure`: preferred statistic (`median`, `mean`, etc.); the module falls back through `concentration_fallback_order` if the field is missing in the data.
-    - `pollutants`: per-pollutant overrides (stats file, `relative_risk` or `beta`, reference concentration delta).
-    - `scenarios`: `all` or a list of emission scenario names to evaluate.
+  - `air_pollution`
+    - Translates emission changes for PM₂.₅ and NOₓ into mortality percentage differences by scaling baseline concentrations with emission ratios.
+    - Key options:
+      - `output_directory`: where health-impact CSVs are written (`results/air_pollution` by default).
+      - `concentration_measure`: preferred statistic (`median`, `mean`, etc.); the module falls back through `concentration_fallback_order` if the field is missing in the data.
+      - `country_weights`: weighting used when averaging country-level responses (`equal` or a mapping `{Country: weight}`, normalised automatically; can be overridden per pollutant).
+      - `pollutants`: per-pollutant overrides (stats file, `relative_risk` or `beta`, reference concentration delta).
+        Use `baseline_deaths` to convert percentage changes into annual death deltas (`per_year` or `total`
+        plus `years`/`span`); a module-level `baseline_deaths` entry applies to the combined total,
+        optionally weighted by `weights`.
+      - `scenarios`: `all` or a list of emission scenario names to evaluate.
+    - Outputs include one `*_health_impact.csv` per pollutant plus optional `*_mortality_summary.csv`
+      (if baseline deaths are configured) and a combined `total_mortality_summary.csv` aggregating all pollutants.
 - `economic_module`
   - Computes SCC by combining temperature, emission, and GDP series.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.

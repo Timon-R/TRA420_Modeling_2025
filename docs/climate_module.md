@@ -93,6 +93,19 @@ Under `climate_module`:
 These are mirrored under `resources/climate` for downstream use (e.g., the
 economic module).
 
+## Usage
+
+Run the FaIR wrapper after emission deltas exist in `resources/<scenario>/co2.csv`:
+
+```bash
+python scripts/run_fair_scenarios.py
+```
+
+Optional flags allow overriding `config.yaml` paths or dumping intermediate
+arrays; consult the script docstring for details. When integrating inside
+Python code, import `climate_module.scenario_runner.run_scenarios` and provide
+`ScenarioSpec` objects.
+
 ## Testing Considerations
 
 - The module requires the `fair` Python package. Tests skip if FaIR is not

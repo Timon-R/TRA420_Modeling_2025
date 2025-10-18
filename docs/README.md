@@ -9,6 +9,8 @@ calculations.
   emission factor conversions, and delta CSV generation.
 - `climate_module.md` – FaIR wrappers, climate parameter presets, and emission
   adjustment mechanics.
+- `air_pollution.md` – concentration-to-health impact linkage, configuration of
+  risk coefficients, baseline mortality, and weighting schemes.
 - `economic_module.md` – social cost of carbon workflow, damage functions, and
   discounting methods.
 - `pattern_scaling.md` – pattern scaling pipeline, required inputs, and output

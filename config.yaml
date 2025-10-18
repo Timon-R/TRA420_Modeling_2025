@@ -157,16 +157,25 @@ air_pollution:
     - mean
     - min
     - max
+  country_weights: equal  # Use 'equal' for uniform averaging or provide {Country: weight}.
   scenarios: all  # 'all' or list of emission scenario names to process.
   pollutants:
     pm25:
       stats_file: data/air_pollution/PM25_country_stats.csv
       relative_risk: 1.08  # RR for a 10 µg/m³ change (log-linear model).
       reference_delta: 10.0  # µg/m³ associated with the relative_risk value.
+      # country_weights:  # Optional override (values will be normalised).
+      #   Bosnia and Herzegovenia: 2.0
+      #   Kosovo: 1.0
     nox:
       stats_file: data/air_pollution/NOx_country_stats.csv
       relative_risk: 1.03
       reference_delta: 10.0
+  baseline_deaths:
+    total: 19000  # Total deaths attributed to air pollution over the specified years.
+    span:
+      start: 2018
+      end: 2020
     
 economic_module:
   output_directory: results/economic  # Folder receiving SCC summary, detail, and per-year CSVs.

@@ -85,6 +85,8 @@ factors, and discounted damages in the result details.
 - `per_year`: table with year, damage/emission deltas, discount factors, and per-year SCC.
 - `details`: richer diagnostics (e.g., consumption metrics for Ramsey).
 
+## Usage
+
 CLI wrapper `scripts/run_scc.py` orchestrates:
 
 - Loading temperature/emission CSVs (labels must match).

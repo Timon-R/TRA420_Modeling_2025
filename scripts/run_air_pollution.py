@@ -26,6 +26,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from air_pollution import run_from_config as run_air_pollution  # noqa: E402
@@ -39,18 +41,30 @@ def main() -> None:
     for scenario, result in impact_results.items():
         print(f"\n=== Scenario: {scenario} ===")
         for pollutant, impact in result.pollutant_results.items():
-            impacts = impact.impacts
             header = (
                 f"{pollutant.upper()} "
                 f"(metric: {impact.concentration_metric}, beta={impact.beta:.4f})"
             )
             print(header)
-            summary = (
-                impacts.groupby("year")["percent_change_mortality"]
-                .mean()
-                .rename("avg_percent_change")
-            )
+            weights = impact.country_weights
+            if not weights.empty:
+                if np.allclose(weights.values, weights.values[0]):
+                    print("    country weights: equal")
+                else:
+                    preview = ", ".join(
+                        f"{country}:{weights[country]:.2f}" for country in list(weights.index)[:3]
+                    )
+                    if len(weights.index) > 3:
+                        preview = f"{preview}, ..."
+                    print(f"    country weights (normalised): {preview}")
+            summary = impact.weighted_percent_change.rename("weighted_percent_change")
             print(summary.to_frame().to_string())
+            if impact.deaths_summary is not None:
+                print("\nEstimated deaths per year:")
+                print(impact.deaths_summary.to_string(index=False))
+        if result.total_mortality_summary is not None:
+            print("\nTotal (all pollutants) deaths per year:")
+            print(result.total_mortality_summary.to_string(index=False))
 
 
 if __name__ == "__main__":
