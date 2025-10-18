@@ -19,14 +19,17 @@ Configuration lives in ``config.yaml`` under the ``climate_module`` section:
 Output
 ------
 For every combination of emission scenario and climate pathway the script writes a
-CSV to ``results/climate/<emission>_<climate>.csv`` and prints a summary table with
-2030, 2050 and 2100 temperatures/deltas.
+CSV to ``results/climate/<emission>_<climate>.csv`` (archival result) and to
+``resources/climate/<emission>_<climate>.csv`` (shared input for downstream modules).
+It also prints a summary table with 2030, 2050 and 2100 temperatures/deltas.
 
 Emission time series
 --------------------
-Emission differences are expressed in **Mt CO₂ per year** (derived from the CSVs in `resources/`). The runner converts them to Gt CO₂ before passing them to FaIR. If you want to prescribe a custom
-trajectory inside the config instead of using the detected CSV, pass an array with
-the same length (and ordering) as the FaIR timepoints returned by
+Emission differences are expressed in **Mt CO₂ per year** (derived from the CSVs in
+``resources/``). The runner converts them to Gt CO₂ before passing them to FaIR. If
+you want to prescribe a custom trajectory inside the config instead of using the
+detected CSV, pass an array with the same length (and ordering) as the FaIR
+timepoints returned by
 :func:`climate_module.compute_temperature_change`. A helper in
 :mod:`climate_module.scenario_runner` already prepares the timepoints for you, so a
 callable adjustment can look like this:
@@ -45,17 +48,15 @@ inject it into the adjusted configuration automatically.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
 from climate_module import DEFAULT_TIME_CONFIG, ScenarioSpec, run_scenarios, step_change
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_config() -> dict:
@@ -113,12 +114,13 @@ SAMPLE_YEARS = _derive_sample_years(CONFIG.get("sample_years_option", "default")
 OUTPUT_DIR = ROOT / CONFIG.get("output_directory", "results/climate")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+RESOURCE_DIR = ROOT / CONFIG.get("resource_directory", "resources/climate")
+RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
+
 EMISSION_DIR = ROOT / CONFIG.get("emission_timeseries_directory", "resources")
 EMISSION_DIR.mkdir(parents=True, exist_ok=True)
 EMISSION_MAP = {
-    d.name: d
-    for d in sorted(EMISSION_DIR.iterdir())
-    if d.is_dir() and (d / "co2.csv").exists()
+    d.name: d for d in sorted(EMISSION_DIR.iterdir()) if d.is_dir() and (d / "co2.csv").exists()
 }
 EMISSION_CFG = CONFIG.get("emission_scenarios", {})
 emission_run = EMISSION_CFG.get("run", "all") if isinstance(EMISSION_CFG, dict) else "all"
@@ -153,7 +155,9 @@ def build_scenarios() -> list[ScenarioSpec]:
         emission_dir = EMISSION_MAP[emission_name]
         default_co2 = emission_dir / "co2.csv"
         if not default_co2.exists():
-            raise FileNotFoundError(f"Missing co2.csv for emission scenario '{emission_name}' in {emission_dir}")
+            raise FileNotFoundError(
+                f"Missing co2.csv for emission scenario '{emission_name}' in {emission_dir}"
+            )
 
         for climate_id in SELECTED_CLIMATE_IDS:
             definition = CLIMATE_DEFS[climate_id]
@@ -218,7 +222,7 @@ def build_scenarios() -> list[ScenarioSpec]:
     return specs
 
 
-def _write_csv(label: str, result) -> None:
+def _write_csv(label: str, climate_scenario: str, result) -> None:
     years = result.years
     mask = _sampling_mask(years)
     df = pd.DataFrame(
@@ -227,9 +231,11 @@ def _write_csv(label: str, result) -> None:
             "temperature_baseline": result.baseline[mask],
             "temperature_adjusted": result.adjusted[mask],
             "temperature_delta": result.delta[mask],
+            "climate_scenario": climate_scenario,
         }
     )
     df.to_csv(OUTPUT_DIR / f"{label}.csv", index=False)
+    df.to_csv(RESOURCE_DIR / f"{label}.csv", index=False)
 
 
 def _print_summary(label: str, result) -> None:
@@ -281,10 +287,12 @@ def _timeseries_adjustment(rel_path: Path):
 
 
 def main() -> None:
-    results = run_scenarios(build_scenarios())
-    for label, result in results.items():
-        _write_csv(label, result)
-        _print_summary(label, result)
+    specs = build_scenarios()
+    results = run_scenarios(specs)
+    for spec in specs:
+        result = results[spec.label]
+        _write_csv(spec.label, spec.scenario, result)
+        _print_summary(spec.label, result)
 
 
 if __name__ == "__main__":

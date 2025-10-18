@@ -67,7 +67,10 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
 
     baseline_cfg = module_cfg.get("baseline", {})
     baseline_demand = _resolve_demand_series(
-        years, demand_scenarios, baseline_cfg.get("demand_scenario"), baseline_cfg.get("demand_custom")
+        years,
+        demand_scenarios,
+        baseline_cfg.get("demand_scenario"),
+        baseline_cfg.get("demand_custom"),
     )
     baseline_mix = _resolve_mix_shares(
         years,
@@ -87,7 +90,10 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
     output_dir = Path(module_cfg.get("output_directory", "resources"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results: dict[str, EmissionScenarioResult] = {}
+    results_dir = Path(module_cfg.get("results_directory", "results/emissions"))
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    results: dict[str, EmissionScenarioResult] = {"baseline": baseline}
     for scenario_cfg in module_cfg.get("scenarios", []):
         name = scenario_cfg.get("name")
         if not name:
@@ -118,18 +124,22 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
         scenario_dir = output_dir / name
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
+        results_scenario_dir = results_dir / name
+        results_scenario_dir.mkdir(parents=True, exist_ok=True)
+
         for pollutant, totals in scenario_result.total_emissions_mt.items():
             baseline_totals = baseline.total_emissions_mt.get(pollutant)
-            if baseline_totals is None:
-                delta = totals.copy()
-            else:
-                delta = totals - baseline_totals
+            delta = totals.copy() if baseline_totals is None else totals - baseline_totals
 
             if pollutant == "co2":
                 scenario_result.delta_mtco2 = delta
 
+            df = pd.DataFrame({"year": years, "delta": delta})
             file_path = scenario_dir / f"{pollutant}.csv"
-            pd.DataFrame({"year": years, "delta": delta}).to_csv(file_path, index=False)
+            df.to_csv(file_path, index=False)
+
+            results_file_path = results_scenario_dir / f"{pollutant}.csv"
+            df.to_csv(results_file_path, index=False)
 
         results[name] = scenario_result
 
@@ -173,7 +183,9 @@ def calculate_emissions(
         generation_twh=generation,
         technology_emissions_mt=technology_emissions,
         total_emissions_mt=total_emissions,
-        delta_mtco2=pd.Series(np.zeros_like(co2_series.values), index=co2_series.index, dtype=float),
+        delta_mtco2=pd.Series(
+            np.zeros_like(co2_series.values), index=co2_series.index, dtype=float
+        ),
     )
 
 
@@ -199,9 +211,7 @@ def _load_emission_factors(path: Path) -> pd.DataFrame:
     required_columns = [meta["column"] for meta in POLLUTANTS.values()]
     missing = [col for col in required_columns if col not in df.columns]
     if missing:
-        raise ValueError(
-            "Emission factors CSV is missing required columns: " + ", ".join(missing)
-        )
+        raise ValueError("Emission factors CSV is missing required columns: " + ", ".join(missing))
     factors = df.set_index("technology")[required_columns].astype(float)
     return factors
 
