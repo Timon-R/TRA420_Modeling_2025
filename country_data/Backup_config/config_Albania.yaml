@@ -7,24 +7,42 @@ calc_emissions:
     end: 2100
     step: 5
   demand_scenarios:
-    reference:
-      description: Albania reference demand (2023) (TWh).
+    low:
+      description: Albania low demand case (TWh).
       values:
-        2025: 5.887708
-        2027: 5.887708
-        2100: 5.887708
-    upper_bound:
-      description: Albania Scenario 1 Upper bound (TWh).
+        2025: 10
+        2030: 12
+        2040: 14
+        2050: 16
+        2060: 18
+        2070: 20
+        2080: 22
+        2090: 24
+        2100: 26
+    baseline:
+      description: Albania baseline demand case (TWh).
       values:
-        2025: 5.887708
-        2027: 3.197192
-        2100: 3.197192
-    lower_bound:
-      description: Albania Scenario 1 Lower bound (TWh).
+        2025: 12
+        2030: 14
+        2040: 16
+        2050: 18
+        2060: 20
+        2070: 22
+        2080: 24
+        2090: 26
+        2100: 28
+    high:
+      description: Albania high demand case (TWh).
       values:
-        2025: 5.887708
-        2027: 3.893849
-        2100: 3.893849
+        2025: 14
+        2030: 16
+        2040: 18
+        2050: 20
+        2060: 22
+        2070: 24
+        2080: 26
+        2090: 28
+        2100: 30
   mix_scenarios:
     reference:
       description: Balanced mix with gradual decarbonisation.
@@ -53,15 +71,15 @@ calc_emissions:
         solar: 0.08
         biomass: 0.02
   baseline:
-    demand_scenario: reference
+    demand_scenario: baseline
     mix_scenario: reference
   scenarios:
-    - name: scenario_1_lower_bound
-      demand_scenario: lower_bound
-      mix_scenario: reference
-    - name: scenario_1_upper_bound
-      demand_scenario: upper_bound
-      mix_scenario: reference
+    - name: energy_mix_A
+      demand_scenario: high
+      mix_scenario: renewables_push
+    - name: energy_mix_B
+      demand_scenario: low
+      mix_scenario: fossil_lockin
     - name: custom_example
       demand_custom:
         2025: 13

@@ -1,30 +1,29 @@
-
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Serbia.csv
-  output_directory: resources/Serbia
+  emission_factors_file: country_data/emission_factors_Montenegro.csv
+  output_directory: resources/Montenegro
   years:
     start: 2025
     end: 2100
     step: 5
   demand_scenarios:
     reference:
-      description: Serbia reference demand (TWh).
+      description: Montenegro reference demand (TWh).
       values:
-        2025: 30.021
-        2027: 30.021
-        2100: 30.021
+        2025: 2.694
+        2027: 2.694
+        2100: 2.694
     upper_bound:
-      description: Serbia upper bound (TWh).
+      description: Montenegro upper bound (TWh).
       values:
-        2025: 30.021
-        2027: 10.618
-        2100: 10.618
+        2025: 2.694
+        2027: 1.899
+        2100: 1.899
     lower_bound:
-      description: Serbia lower bound (TWh).
+      description: Montenegro lower bound (TWh).
       values:
-        2025: 30.021
-        2027: 12.010
-        2100: 12.010
+        2025: 2.694
+        2027: 1.899
+        2100: 1.899
   mix_scenarios:
     reference:
       description: Balanced mix with gradual decarbonisation.
@@ -68,21 +67,19 @@ calc_emissions:
       mix_scenario: reference
     - name: custom_example
       demand_custom:
-        2025: 48
-        2030: 53
-        2040: 58
-        2050: 63
-        2060: 68
-        2070: 73
-        2080: 78
-        2090: 83
-        2100: 88
+        2025: 5
+        2030: 6
+        2040: 7.5
+        2050: 9
+        2060: 10.5
+        2070: 11.5
+        2080: 12
+        2090: 12.5
+        2100: 13
       mix_custom:
         shares:
-          coal: 0.15
-          gas: 0.25
-          nuclear: 0.15
-          hydro: 0.12
-          wind: 0.15
-          solar: 0.12
-          biomass: 0.06
+          coal: 0.08
+          gas: 0.12
+          hydro: 0.55
+          wind: 0.13
+          solar: 0.10

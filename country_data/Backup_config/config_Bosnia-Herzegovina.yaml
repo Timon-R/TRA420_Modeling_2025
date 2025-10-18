@@ -1,30 +1,48 @@
 
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Bosnia_Herzegowina.csv
+  emission_factors_file: country_data/emission_factors_Bosnia-Herzegovina.csv
   output_directory: resources/Bosnia-Herzegovina
   years:
     start: 2025
     end: 2100
     step: 5
   demand_scenarios:
-    reference:
-      description: Bosnia-Herzegovina reference demand (TWh).
+    low:
+      description: Bosnia-Herzegovina low demand case (TWh).
       values:
-        2025: 10.355600
-        2027: 10.355600
-        2100: 10.355600
-    upper_bound:
-      description: Bosnia-Herzegovina upper bound (TWh).
+        2025: 20
+        2030: 22
+        2040: 24
+        2050: 26
+        2060: 28
+        2070: 30
+        2080: 32
+        2090: 34
+        2100: 36
+    baseline:
+      description: Bosnia-Herzegovina baseline demand case (TWh).
       values:
-        2025: 10.355600
-        2027: 5.963888
-        2100: 5.963888
-    lower_bound:
-      description: Bosnia-Herzegovina lower bound (TWh).
+        2025: 22
+        2030: 24
+        2040: 26
+        2050: 28
+        2060: 30
+        2070: 32
+        2080: 34
+        2090: 36
+        2100: 38
+    high:
+      description: Bosnia-Herzegovina high demand case (TWh).
       values:
-        2025: 10.355600
-        2027: 5.904654
-        2100: 5.904654
+        2025: 24
+        2030: 26
+        2040: 28
+        2050: 30
+        2060: 32
+        2070: 34
+        2080: 36
+        2090: 38
+        2100: 40
   mix_scenarios:
     reference:
       description: Balanced mix with gradual decarbonisation.
@@ -52,15 +70,15 @@ calc_emissions:
         wind: 0.03
         solar: 0.02
   baseline:
-    demand_scenario: reference
+    demand_scenario: baseline
     mix_scenario: reference
   scenarios:
-    - name: scenario_1_lower_bound
-      demand_scenario: lower_bound
-      mix_scenario: reference
-    - name: scenario_1_upper_bound
-      demand_scenario: upper_bound
-      mix_scenario: reference
+    - name: energy_mix_A
+      demand_scenario: high
+      mix_scenario: renewables_push
+    - name: energy_mix_B
+      demand_scenario: low
+      mix_scenario: fossil_lockin
     - name: custom_example
       demand_custom:
         2025: 23
