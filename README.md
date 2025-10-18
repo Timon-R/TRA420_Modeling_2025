@@ -42,6 +42,39 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 ## Running the Pipeline
 
+### Electricity emissions per country
+
+Run the calculator for one country (writes deltas under that country's resources folder):
+
+```bash
+python scripts/run_calc_emissions.py --country Albania
+```
+
+Valid names match config filenames (underscores instead of spaces), e.g. `Serbia`, `Bosnia-Herzegovina`, `North_Macedonia`, `Kosovo`, `Montenegro`.
+
+### Aggregate emissions across all countries
+
+Compute deltas for all countries and write the sum by scenario to `resources/All_countries/<scenario>/*.csv`:
+
+```bash
+python scripts/run_calc_emissions_all.py
+```
+
+Options:
+
+- Restrict to specific countries:
+
+  ```bash
+  python scripts/run_calc_emissions_all.py --countries Albania Serbia
+  ```
+
+- Choose a different output directory:
+
+  ```bash
+  python scripts/run_calc_emissions_all.py --output resources/All_countries_custom
+  ```
+
+Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `sox.csv`, `pm25.csv`, and `gwp100.csv` when available) with columns `year,delta` in Mt/year.
 Typical workflow (driven by `config.yaml`):
 
 1. **Emissions** – `python scripts/run_calc_emissions.py` (optional; prepares `resources/<scenario>/co2.csv`).

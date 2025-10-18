@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+
 import pandas as pd
 
 from calc_emissions import run_from_config  # noqa: E402

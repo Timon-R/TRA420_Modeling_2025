@@ -1,0 +1,81 @@
+
+calc_emissions:
+  emission_factors_file: country_data/emission_factors_Bosnia_Herzegowina.csv
+  output_directory: resources/Bosnia-Herzegovina
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+  demand_scenarios:
+    reference:
+      description: Bosnia-Herzegovina reference demand (TWh).
+      values:
+        2025: 10.355600
+        2027: 10.355600
+        2100: 10.355600
+    upper_bound:
+      description: Bosnia-Herzegovina upper bound (TWh).
+      values:
+        2025: 10.355600
+        2027: 5.963888
+        2100: 5.963888
+    lower_bound:
+      description: Bosnia-Herzegovina lower bound (TWh).
+      values:
+        2025: 10.355600
+        2027: 5.904654
+        2100: 5.904654
+  mix_scenarios:
+    reference:
+      description: Balanced mix with gradual decarbonisation.
+      shares:
+        coal: 0.60
+        gas: 0.10
+        hydro: 0.20
+        wind: 0.05
+        solar: 0.05
+    renewables_push:
+      description: Accelerated deployment of wind and solar.
+      shares:
+        coal: 0.30
+        gas: 0.10
+        hydro: 0.30
+        wind: 0.15
+        solar: 0.10
+        biomass: 0.05
+    fossil_lockin:
+      description: Slower transition away from fossil generation.
+      shares:
+        coal: 0.70
+        gas: 0.15
+        hydro: 0.10
+        wind: 0.03
+        solar: 0.02
+  baseline:
+    demand_scenario: reference
+    mix_scenario: reference
+  scenarios:
+    - name: scenario_1_lower_bound
+      demand_scenario: lower_bound
+      mix_scenario: reference
+    - name: scenario_1_upper_bound
+      demand_scenario: upper_bound
+      mix_scenario: reference
+    - name: custom_example
+      demand_custom:
+        2025: 23
+        2030: 25
+        2040: 27
+        2050: 29
+        2060: 31
+        2070: 33
+        2080: 35
+        2090: 37
+        2100: 39
+      mix_custom:
+        shares:
+          coal: 0.40
+          gas: 0.10
+          hydro: 0.30
+          wind: 0.10
+          solar: 0.10
