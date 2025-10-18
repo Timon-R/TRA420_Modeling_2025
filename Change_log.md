@@ -12,19 +12,13 @@
   - Changed emission factor input units in emission factor tables to kg per kWh, so that they better match data from Ecoinvent. Adapted emission calculation code. Outputs are still in Mt of emissions.
   - Changed name of SO_2 emissions 'so2_kg_per_kWh' to 'sox_kg_kWh' to match emission factors in Ecoinvent.
 
-  ## 20251018
+## 2025-10-18
   # Commit 1
   - Added/updated per-country emission factor CSVs from `Emission_factors_all.xlsx`:
     - Wrote country files: `emission_factors_Albania.csv`, `emission_factors_Bosnia-Herzegowina.csv`, `emission_factors_Kosovo.csv`, `emission_factors_Montenegro.csv`, `emission_factors_North_Macedonia.csv`, `emission_factors_Serbia.csv`.
     - Renamed `product` column to `technology` and mapped product strings to technology keys (e.g., lignite->coal, photovoltaic->solar, wood->biomass, etc.).
     - Appended a `storage` technology row (empty numeric fields) to each file and replaced temporary 'NA' placeholders with empty cells for numeric compatibility.
 
-
-  ### Commit 5: Add all-countries emissions aggregator
-  - New script `scripts/run_calc_emissions_all.py` runs the emissions calculator for all country configs
-    and aggregates per-scenario deltas across countries.
-  - Aggregated outputs are written to `resources/All_countries/<scenario>/{co2,nox,sox,pm25,gwp100}.csv`.
-  - Updated `README.md` with usage instructions for single-country and all-countries runs.
   # Commit 2
   - Removed `calc_emission` input from `config.yaml` file 
   - Standardized country configs (Bosnia-Herzegovina, Kosovo, North_Macedonia, Serbia):
@@ -51,6 +45,12 @@
     - Updated all country configs to use `demand_scenario: reference` instead of `demand_scenario: baseline` in baseline sections.
     - Fixed Bosnia-Herzegovina config to reference correct emission factors filename: `emission_factors_Bosnia_Herzegowina.csv`.
   - Verified all six countries (Albania, Bosnia-Herzegovina, Kosovo, North Macedonia, Serbia, Montenegro) run successfully and generate emissions outputs for all scenarios.
+
+  # Commit 5: Add all-countries emissions aggregator
+  - New script `scripts/run_calc_emissions_all.py` runs the emissions calculator for all country configs
+    and aggregates per-scenario deltas across countries.
+  - Aggregated outputs are written to `resources/All_countries/<scenario>/{co2,nox,sox,pm25,gwp100}.csv`.
+  - Updated `README.md` with usage instructions for single-country and all-countries runs.
 
 
 
