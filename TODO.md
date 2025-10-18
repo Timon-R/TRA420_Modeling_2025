@@ -14,7 +14,7 @@ A checklist of tasks, features, and improvements for this project.
 - [ ] Implement change in grid mix over time (?)
 - [x] Insert correct values for emission factors. Change over time ?
     - So far no changes over time
-- [ ] Seperate config and input data into different files
+- [x] Seperate config and input data into different files
 - [x] Put country wise emission differences into 'All_countries' folder in resources, and only summed emissions for the region into resources folder.
 - [ ] Change assumptions for demand in 2100 and find suitable interpolation
 - [ ] Update README.md
