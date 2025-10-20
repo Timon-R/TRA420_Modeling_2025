@@ -152,7 +152,8 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     assert policy_metrics.temperature_timeseries is not None
     assert policy_metrics.temperature_timeseries[2030] == pytest.approx(-0.2)
     assert policy_metrics.scc_usd_per_tco2["ramsey_discount"][2030] == 50.0
-    assert policy_metrics.damages_usd["ramsey_discount"][2050] == -7.5e9
+    assert policy_metrics.damages_usd["ramsey_discount"][2030] == pytest.approx(-5.0e8)
+    assert policy_metrics.damages_usd["ramsey_discount"][2050] == pytest.approx(-9.0e8)
     assert policy_metrics.mortality_delta[2050] == -30
     assert policy_metrics.scc_average["ramsey_discount"] == 50.0
     assert policy_metrics.damage_total_usd["ramsey_discount"] == pytest.approx(-12.5e9)
@@ -163,8 +164,11 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     )
     assert summary_txt.exists()
     content = summary_txt.read_text()
+    assert "Damages are per reporting year and expressed as present-value 2025 USD." in content
     assert "Scenario: policy_ssp245" in content
     assert "SCC average (2025-2050):" in content
+    assert "  Damages (Billion USD, PV 2025):" in content
+    assert "      2030: -0.50" in content
 
     summary_json = write_summary_json(
         settings, methods, metrics_map, output_path=root / "results" / "summary"
@@ -182,6 +186,9 @@ def test_build_summary_collects_metrics(tmp_path: Path):
         settings_py, methods_py, metrics_map_py, output_path=root / "results" / "summary_per_year"
     )
     text_py = summary_txt_py.read_text()
+    assert "Damages are per reporting year and expressed as present-value 2025 USD." in text_py
     assert "SCC (USD/tCO₂):" in text_py
     assert "    ramsey_discount:" in text_py
     assert "      2030: 50.00" in text_py
+    assert "  Damages (Billion USD, PV 2025):" in text_py
+    assert "      2050: -0.90" in text_py

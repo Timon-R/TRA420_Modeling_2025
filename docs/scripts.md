@@ -40,6 +40,16 @@ This project includes small wrappers around the core modules to make end‑to‑
   - Aggregation:
     - `per_year`: SCC series printed for selected years in the summary tool.
     - `average`: single SCC per method over the configured horizon.
+  - Run methods (`--run-method` or `economic_module.run.method`):
+    - `kernel` – fast kernel-based SCC allocation (default).
+    - `pulse` – definition-faithful FaIR pulses (slower; one discounting method per run).
+  - Discounting methods (`--discount-methods` or `economic_module.methods.run`):
+    - `constant_discount`, `ramsey_discount` (or both via `all`).
+  - Pulse-mode extras:
+    - Besides the usual `scc_timeseries_<method>_<scenario>.csv`, the script writes
+      `pulse_scc_timeseries_<method>_<scenario>.csv` (per-pulse PV damages + SCC) and
+      `pulse_emission_damages_<method>_<scenario>.csv` (damages from the actual emission
+      delta sequence) to clarify the two calculations.
 
 ## Summary
 
@@ -57,4 +67,3 @@ This project includes small wrappers around the core modules to make end‑to‑
 
 - `clean_cache.py` — removes `__pycache__`, `.pytest_cache`, `.ruff_cache`, coverage files.
 - `clean_outputs.py` — deletes `resources/` and `results/` (use with caution).
-

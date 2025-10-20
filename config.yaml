@@ -88,6 +88,17 @@ economic_module:
   output_directory: results/economic  # Folder receiving SCC summary, detail, and per-year CSVs.
   gdp_series: null  # Optional override CSV with columns: year, gdp_trillion_usd [, population_million].
   gdp_population_directory: data/GDP_and_Population_data  # Prefers long CSVs (SSP_gdp_long_2020ppp.csv, SSP_population_long.csv); falls back to Excel.
+  run:
+    method: pulse          # 'kernel' (fast IRF approximation) or 'pulse' (FaIR pulse runs)
+    kernel:
+      horizon: null           # Optional integer L; null uses full length
+      regularization_alpha: 1.0e-6  # Ridge α for kernel inversion
+      nonnegativity: false    # Clip kernel to g(ℓ) ≥ 0
+      smoothing_lambda: 0.0   # Roughness penalty weight (first-difference)
+      allocation:
+        linearized_damage: false  # Use ∂D/∂T × ΔTτ instead of full damage diff
+    pulse:
+      pulse_size_tco2: 1000000.0  # 1 MtCO₂ pulse size per year when using pulse valuation
   data_sources:
     emission_root: resources/All_countries  # Root directory containing <scenario>/co2.csv produced by calc_emissions aggregation.
     temperature_root: resources/climate  # Directory containing <scenario>_<climate>.csv exported by the climate module.
@@ -100,7 +111,7 @@ economic_module:
     - scenario_1_lower_bound
     - scenario_1_upper_bound
   base_year: 2025  # Present-value reference year for discounting (must exist in GDP/temperature grids).
-  damage_duration_years: 300  # Duration (years from start) for SCC damages; must exceed time_horizon span (FaIR runs to start + duration - 1 with constant emission tails).
+  damage_duration_years: 450  # Duration (years from start) for SCC damages; must exceed time_horizon span (FaIR runs to start + duration - 1 with constant emission tails).
   aggregation: per_year  # 'average' (USD/tCO₂) or 'per_year' (time series).
   aggregation_horizon:
     start: 2025  # Averaging window start year (required when aggregation == 'average').

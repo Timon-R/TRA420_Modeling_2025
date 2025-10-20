@@ -84,16 +84,15 @@ def test_compute_scc_constant_discount(sample_inputs: EconomicInputs):
     )
     assert not np.isnan(result.scc_usd_per_tco2)
     per_year = result.per_year
-    assert "incremental_delta_damage_usd" in per_year.columns
-    assert "discounted_incremental_delta_usd" in per_year.columns
+    assert "damage_attributed_usd" in per_year.columns
+    assert "discounted_damage_attributed_usd" in per_year.columns
     np.testing.assert_allclose(
-        per_year["incremental_delta_damage_usd"].iloc[0],
-        per_year["delta_damage_usd"].iloc[0],
+        per_year["discounted_damage_attributed_usd"].sum(),
+        per_year["discounted_delta_usd"].sum(),
     )
-    np.testing.assert_allclose(
-        per_year["discounted_incremental_delta_usd"].iloc[0],
-        per_year["discounted_delta_usd"].iloc[0],
-    )
+    assert result.temperature_kernel is not None
+    assert result.temperature_kernel.shape[0] == len(per_year)
+    assert result.run_method == "kernel"
 
 
 def test_compute_scc_ramsey_discount(sample_inputs: EconomicInputs):
@@ -109,6 +108,7 @@ def test_compute_scc_ramsey_discount(sample_inputs: EconomicInputs):
         damage_kwargs={"delta2": 0.0},
     )
     assert result.per_year["discount_factor"].iloc[0] == pytest.approx(1.0)
+    assert result.run_method == "kernel"
 
 
 def test_from_csv_automatically_loads_ssp_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -149,6 +149,7 @@ def test_from_csv_automatically_loads_ssp_data(tmp_path: Path, monkeypatch: pyte
     )
 
     assert inputs.ssp_family == "SSP2"
-    np.testing.assert_allclose(inputs.gdp_trillion_usd, np.array([80.0, 90.0]))
+    np.testing.assert_array_equal(inputs.years, np.arange(2025, 2031))
+    np.testing.assert_allclose(inputs.gdp_trillion_usd[[0, -1]], np.array([80.0, 90.0]))
     assert inputs.population_million is not None
-    np.testing.assert_allclose(inputs.population_million, np.array([7000.0, 7100.0]))
+    np.testing.assert_allclose(inputs.population_million[[0, -1]], np.array([7000.0, 7100.0]))

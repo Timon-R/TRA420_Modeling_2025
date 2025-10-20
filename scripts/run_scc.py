@@ -47,7 +47,8 @@ from economic_module import EconomicInputs, SCCAggregation, compute_scc
 
 ROOT = Path(__file__).resolve().parents[1]
 
-AVAILABLE_METHODS = ["constant_discount", "ramsey_discount"]
+RUN_METHODS = ["kernel", "pulse"]
+AVAILABLE_DISCOUNT_METHODS = ["constant_discount", "ramsey_discount"]
 AVAILABLE_AGGREGATIONS: tuple[SCCAggregation, ...] = ("average", "per_year")
 
 
@@ -205,18 +206,26 @@ def _restrict_inputs_window(
     )
 
 
-def _default_methods(cfg: dict) -> list[str]:
+def _default_run_method(cfg: dict) -> str:
+    run_cfg = cfg.get("run", {})
+    method = run_cfg.get("method", "kernel")
+    if method not in RUN_METHODS:
+        method = "kernel"
+    return method
+
+
+def _default_discount_methods(cfg: dict) -> list[str]:
     methods_cfg = cfg.get("methods", {})
     run = methods_cfg.get("run")
     if isinstance(run, str):
         if run.lower() == "all":
-            return AVAILABLE_METHODS
+            return AVAILABLE_DISCOUNT_METHODS
         return [run]
     if isinstance(run, Iterable):
         selected = [str(item) for item in run]
-        valid = [m for m in selected if m in AVAILABLE_METHODS]
-        return valid or AVAILABLE_METHODS
-    return AVAILABLE_METHODS
+        valid = [m for m in selected if m in AVAILABLE_DISCOUNT_METHODS]
+        return valid or AVAILABLE_DISCOUNT_METHODS
+    return AVAILABLE_DISCOUNT_METHODS
 
 
 def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
@@ -226,6 +235,7 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
     aggregation_default = str(cfg.get("aggregation", "average")).lower()
     if aggregation_default not in AVAILABLE_AGGREGATIONS:
         aggregation_default = "average"
+    run_method_default = _default_run_method(cfg)
     damage_cfg = cfg.get("damage_function", {})
     damage_delta1_default = float(damage_cfg.get("delta1", 0.0))
     damage_delta2_default = float(damage_cfg.get("delta2", 0.002))
@@ -332,19 +342,24 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
         help="Year used as present value reference.",
     )
     parser.add_argument(
-        "--method",
-        action="append",
-        choices=AVAILABLE_METHODS + ["all"],
-        help=(
-            "Discounting approach: constant rate or Ramsey rule. Use multiple "
-            "--method flags or 'all'."
-        ),
-    )
-    parser.add_argument(
         "--aggregation",
         choices=AVAILABLE_AGGREGATIONS,
         default=aggregation_default,
         help="Return per-year SCC values or the aggregated average (default from config).",
+    )
+    parser.add_argument(
+        "--run-method",
+        choices=RUN_METHODS,
+        default=run_method_default,
+        help="Kernel-based SCC ('kernel') or FaIR pulse SCC ('pulse').",
+    )
+    parser.add_argument(
+        "--discount-methods",
+        default=None,
+        help=(
+            "Comma-separated discounting methods to run "
+            "(constant_discount, ramsey_discount, or 'all'; default from config)."
+        ),
     )
     parser.add_argument(
         "--emission-root",
@@ -554,14 +569,6 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_methods(args: argparse.Namespace, cfg: dict) -> list[str]:
-    if args.method:
-        if "all" in args.method:
-            return AVAILABLE_METHODS
-        return [m for m in args.method if m in AVAILABLE_METHODS]
-    return _default_methods(cfg)
-
-
 def _collect_sources(
     arg_entries: list[str] | None,
     cfg_map: Mapping[str, str] | None,
@@ -625,16 +632,32 @@ def main() -> None:
 
     if args.list_methods:
         msg_lines = [
-            "Available methods:",
+            "Available run methods:",
+            "  kernel - Kernel-based SCC allocation (fast).",
+            "  pulse  - Definition-faithful FaIR pulse runs (slower).",
+            "",
+            "Available discounting methods:",
             "  constant_discount - fixed annual discount rate (e.g., 3%).",
             "  ramsey_discount   - Ramsey rule with rho (time preference) and eta (risk aversion).",
         ]
         print("\n".join(msg_lines))
         return
 
-    methods = _resolve_methods(args, config)
-    if not methods:
-        parser.error("No valid SCC methods selected.")
+    run_method = args.run_method
+    discount_methods = _default_discount_methods(config)
+    if args.discount_methods:
+        spec = args.discount_methods.strip()
+        if spec.lower() == "all":
+            discount_methods = AVAILABLE_DISCOUNT_METHODS
+        else:
+            requested = [item.strip() for item in spec.split(",") if item.strip()]
+            valid = [m for m in requested if m in AVAILABLE_DISCOUNT_METHODS]
+            if valid:
+                discount_methods = valid
+    if not discount_methods:
+        parser.error("No valid discounting methods selected.")
+    if run_method == "pulse" and len(discount_methods) != 1:
+        parser.error("Pulse run method supports exactly one discounting method at a time.")
 
     time_horizon_cfg = root_cfg.get("time_horizon", {})
     horizon_start = int(time_horizon_cfg.get("start", args.base_year))
@@ -832,6 +855,15 @@ def main() -> None:
     agg_end = args.aggregation_end
 
     summary_rows = []
+    run_cfg = config.get("run", {}) or {}
+    kernel_cfg = run_cfg.get("kernel", {}) or {}
+    allocation_cfg = kernel_cfg.get("allocation", {}) or {}
+    pulse_cfg = run_cfg.get("pulse", {}) or {}
+    kernel_horizon = kernel_cfg.get("horizon")
+    kernel_alpha = float(kernel_cfg.get("regularization_alpha", 1.0e-6))
+    kernel_nonneg = bool(kernel_cfg.get("nonnegativity", False))
+    kernel_smooth = float(kernel_cfg.get("smoothing_lambda", 0.0))
+    linearized_damage = bool(allocation_cfg.get("linearized_damage", False))
     damage_kwargs = {
         "delta1": args.damage_delta1,
         "delta2": args.damage_delta2,
@@ -886,6 +918,13 @@ def main() -> None:
             except ValueError as exc:
                 parser.error(str(exc))
 
+        pulse_max_year = None
+        if run_method == "pulse":
+            pulse_max_year = int(working_inputs.years.max())
+            horizon_end_cfg = time_horizon_cfg.get("end")
+            if horizon_end_cfg is not None:
+                pulse_max_year = min(pulse_max_year, int(horizon_end_cfg))
+
         if aggregation == "average":
             if agg_start is None or agg_end is None:
                 parser.error(
@@ -916,62 +955,123 @@ def main() -> None:
             except ValueError as exc:
                 parser.error(str(exc))
 
-        if args.base_year not in set(working_inputs.years.tolist()):
-            parser.error(
-                f"Base year {args.base_year} is outside the SCC evaluation window "
-                f"({working_inputs.years[0]}-{working_inputs.years[-1]})."
-            )
+            if args.base_year not in set(working_inputs.years.tolist()):
+                parser.error(
+                    f"Base year {args.base_year} is outside the SCC evaluation window "
+                    f"({working_inputs.years[0]}-{working_inputs.years[-1]})."
+                )
+
+            if run_method == "pulse" and agg_end is not None:
+                pulse_max_year = min(pulse_max_year, int(agg_end))
 
         for scenario in targets:
             scenario_reference = ref_map.get(scenario, reference_label)
-            for method in methods:
-                kwargs = {
+            safe_name = _safe_name(scenario)
+
+            for discount_method in discount_methods:
+                run_kwargs = {
                     "scenario": scenario,
                     "reference": scenario_reference,
                     "base_year": args.base_year,
                     "aggregation": aggregation,
                     "add_tco2": args.add_tco2,
-                    "damage_kwargs": damage_kwargs,
                 }
-                if method == "constant_discount":
-                    kwargs["discount_rate"] = args.discount_rate
-                elif method == "ramsey_discount":
-                    kwargs["rho"] = args.rho
-                    kwargs["eta"] = args.eta
+                damage_kw = dict(damage_kwargs)
+                damage_kw["_kernel_horizon__"] = (
+                    int(kernel_horizon) if kernel_horizon is not None else 0
+                )
+                damage_kw["_kernel_alpha__"] = kernel_alpha
+                damage_kw["_kernel_nonneg__"] = kernel_nonneg
+                damage_kw["_kernel_smooth__"] = kernel_smooth
+                damage_kw["_linearized_flag__"] = linearized_damage
+                if run_method == "pulse":
+                    damage_kw["_pulse_size_tco2__"] = float(pulse_cfg.get("pulse_size_tco2", 1.0e6))
+                run_kwargs["damage_kwargs"] = damage_kw
 
-                result = compute_scc(working_inputs, method, **kwargs)
+                if discount_method == "constant_discount":
+                    run_kwargs["discount_rate"] = args.discount_rate
+                elif discount_method == "ramsey_discount":
+                    run_kwargs["rho"] = args.rho
+                    run_kwargs["eta"] = args.eta
 
-                safe_name = _safe_name(scenario)
-                details_path = output_dir / f"scc_{method}_{safe_name}.csv"
+                if run_method == "kernel":
+                    method_key = discount_method
+                    result = compute_scc(working_inputs, method_key, **run_kwargs)
+                    run_label = "kernel"
+                else:  # pulse
+                    method_key = "pulse"
+                    result = compute_scc(
+                        working_inputs,
+                        method_key,
+                        discount_method=discount_method,
+                        pulse_max_year=pulse_max_year,
+                        **run_kwargs,
+                    )
+                    run_label = "pulse"
+
+                method_label = result.method
+                file_tag = method_label
+                details_path = output_dir / f"scc_{file_tag}_{safe_name}.csv"
                 result.details.to_csv(details_path, index=False)
 
-                timeseries_path = output_dir / f"scc_timeseries_{method}_{safe_name}.csv"
+                timeseries_path = output_dir / f"scc_timeseries_{file_tag}_{safe_name}.csv"
                 result.per_year.to_csv(timeseries_path, index=False)
+                extra_paths: list[Path] = [timeseries_path]
+
+                if run_label == "pulse":
+                    pulse_columns = {
+                        "year": "year",
+                        "discount_factor": "discount_factor",
+                        "discounted_damage_attributed_usd": "pv_damage_per_pulse_usd",
+                        "scc_usd_per_tco2": "scc_usd_per_tco2",
+                        "pulse_size_tco2": "pulse_size_tco2",
+                    }
+                    pulse_df = result.per_year[list(pulse_columns.keys())].rename(
+                        columns=pulse_columns
+                    )
+                    pulse_path = output_dir / f"pulse_scc_timeseries_{file_tag}_{safe_name}.csv"
+                    pulse_df.to_csv(pulse_path, index=False)
+                    extra_paths.append(pulse_path)
+
+                    damage_columns = {
+                        "year": "year",
+                        "delta_emissions_tco2": "delta_emissions_tco2",
+                        "delta_damage_usd": "delta_damage_usd",
+                        "discounted_delta_usd": "pv_delta_damage_usd",
+                    }
+                    damage_df = result.per_year[list(damage_columns.keys())].rename(
+                        columns=damage_columns
+                    )
+                    damage_path = output_dir / f"pulse_emission_damages_{file_tag}_{safe_name}.csv"
+                    damage_df.to_csv(damage_path, index=False)
+                    extra_paths.append(damage_path)
 
                 summary_rows.append(
                     {
                         "scenario": scenario,
                         "reference": scenario_reference,
-                        "method": method,
+                        "method": method_label,
+                        "run_method": run_label,
                         "aggregation": aggregation,
                         "scc_usd_per_tco2": result.scc_usd_per_tco2,
                         "base_year": result.base_year,
                         "total_delta_emissions_tco2": result.add_tco2,
                         "discount_rate": args.discount_rate
-                        if method == "constant_discount"
+                        if method_label == "constant_discount"
                         else np.nan,
-                        "rho": args.rho if method == "ramsey_discount" else np.nan,
-                        "eta": args.eta if method == "ramsey_discount" else np.nan,
+                        "rho": args.rho if method_label == "ramsey_discount" else np.nan,
+                        "eta": args.eta if method_label == "ramsey_discount" else np.nan,
                     }
                 )
 
                 print(
-                    f"[{method}] {scenario} vs {scenario_reference}: "
+                    f"[{run_label}:{method_label}] {scenario} vs {scenario_reference}: "
                     f"{result.scc_usd_per_tco2:,.2f} USD/tCO2 (aggregation {aggregation}, "
                     f"base year {result.base_year})"
                 )
                 print(f"  Details written to {_format_path(details_path)}")
-                print(f"  SCC time series written to {_format_path(timeseries_path)}")
+                for path in extra_paths:
+                    print(f"  Output written to {_format_path(path)}")
 
     summary = pd.DataFrame(summary_rows)
     summary_path = output_dir / "scc_summary.csv"

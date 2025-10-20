@@ -29,6 +29,9 @@ class SummarySettings:
     plot_start: int = 2025
     plot_end: int = 2100
     climate_labels: list[str] = field(default_factory=list)
+    run_method: str = "kernel"
+    scc_output_directory: Path | None = None
+    base_year: int = 2025
 
 
 @dataclass(slots=True)
@@ -306,6 +309,8 @@ def _read_scc_timeseries(
             scc_values[method] = {year: math.nan for year in years}
             continue
         frame["year"] = frame["year"].astype(int)
+        # Prefer emission-year attributed NPV damages when available; fall back
+        # to per-calendar-year damage deltas to preserve backward compatibility.
         damages_series = frame.set_index("year")["delta_damage_usd"].astype(float)
         damages[method] = {
             int(year): float(damages_series.get(int(year), np.nan)) for year in years
@@ -336,6 +341,14 @@ def build_summary(
         ) from exc
     if not isinstance(economic_cfg, Mapping):
         raise ValueError("economic_module configuration must be a mapping.")
+    try:
+        emission_to_tonnes = float(economic_cfg.get("emission_to_tonnes", 1e6))
+    except (TypeError, ValueError):
+        emission_to_tonnes = 1e6
+    try:
+        base_year_value = int(economic_cfg.get("base_year", 2025))
+    except (TypeError, ValueError):
+        base_year_value = 2025
 
     summary_cfg = (
         config.get("results", {}).get("summary", {})
@@ -367,6 +380,8 @@ def build_summary(
     # settings will be created after climate label resolution
 
     methods = _resolve_methods(economic_cfg.get("methods", {}))
+    run_cfg = economic_cfg.get("run", {}) if isinstance(economic_cfg, Mapping) else {}
+    run_method = str(run_cfg.get("method", "kernel")) if isinstance(run_cfg, Mapping) else "kernel"
 
     data_sources = economic_cfg.get("data_sources", {})
     if not isinstance(data_sources, Mapping):
@@ -461,14 +476,30 @@ def build_summary(
             if aggregation_mode != "average":
                 scc_average = {}
 
+            damages_adjusted = {method: dict(series) for method, series in damages.items()}
+            ramsey_key = "ramsey_discount"
+            if ramsey_key in methods:
+                ramsey_scc = scc_values.get(ramsey_key, {})
+                computed: dict[int, float] = {}
+                for year in years:
+                    emission_value = emission_delta.get(year, math.nan)
+                    scc_value = ramsey_scc.get(year, math.nan)
+                    if any(math.isnan(value) for value in (emission_value, scc_value)):
+                        computed[year] = math.nan
+                    else:
+                        computed[year] = emission_value * emission_to_tonnes * scc_value
+                damages_adjusted[ramsey_key] = computed
+
+            scc_values_copy = {method: dict(series) for method, series in scc_values.items()}
+
             metrics_map[scenario_label] = ScenarioMetrics(
                 emission_delta_mt=emission_delta,
                 temperature_delta_c=temperature_delta,
                 mortality_delta=mortality_delta,
                 mortality_percent=mortality_percent,
                 mortality_baseline=mortality_baseline,
-                scc_usd_per_tco2=scc_values,
-                damages_usd=damages,
+                scc_usd_per_tco2=scc_values_copy,
+                damages_usd=damages_adjusted,
                 scc_average=scc_average,
                 damage_total_usd=damage_totals,
                 emission_timeseries=emission_series_dict,
@@ -486,6 +517,9 @@ def build_summary(
         plot_start=plot_start,
         plot_end=plot_end,
         climate_labels=climate_labels_str,
+        run_method=run_method,
+        scc_output_directory=scc_output_dir,
+        base_year=base_year_value,
     )
 
     if not metrics_map:
@@ -553,6 +587,10 @@ def write_summary_text(
     lines.append("Summary Overview")
     lines.append("=" * len("Summary Overview"))
     lines.append("")
+    lines.append(
+        f"Damages are per reporting year and expressed as present-value {settings.base_year} USD."
+    )
+    lines.append("")
 
     for scenario in sorted(metrics_map):
         metrics = metrics_map[scenario]
@@ -591,10 +629,16 @@ def write_summary_text(
                     value = series.get(year, math.nan)
                     lines.append(f"      {year}: {_format_value(value)}")
 
-        lines.append("  Discounted damage totals (USD):")
+        lines.append(f"  Damages (Billion USD, PV {settings.base_year}):")
         for method in methods:
-            value = metrics.damage_total_usd.get(method, math.nan)
-            lines.append(f"    {method}: {_format_value(value)}")
+            lines.append(f"    {method}:")
+            series = metrics.damages_usd.get(method, {})
+            for year in settings.years:
+                value = series.get(year, math.nan)
+                if isinstance(value, float) and math.isnan(value):
+                    lines.append(f"      {year}: NaN")
+                else:
+                    lines.append(f"      {year}: {_format_value(value / 1e9)}")
 
         lines.append("")
 
@@ -733,6 +777,79 @@ def _plot_temperature_timeseries(
     fig.tight_layout()
     fig.savefig(output_path / f"{file_name}.{plot_format}", format=plot_format)
     plt.close(fig)
+
+
+def _plot_scc_timeseries(
+    settings: SummarySettings,
+    methods: Iterable[str],
+    metrics_map: Mapping[str, ScenarioMetrics],
+) -> None:
+    if settings.run_method != "pulse":
+        return
+    if settings.scc_output_directory is None:
+        LOGGER.info("SCC output directory not available; skipping SCC timeseries plot.")
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover - optional dependency
+        LOGGER.warning("matplotlib not available; skipping SCC timeseries plot")
+        return
+
+    output_dir = settings.output_directory / "plots"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for method in methods:
+        curves: list[tuple[list[int], list[float], str]] = []
+        plotted_labels: set[str] = set()
+        for scenario in sorted(metrics_map):
+            safe_name = _safe_name(scenario)
+            path = settings.scc_output_directory / f"scc_timeseries_{method}_{safe_name}.csv"
+            if not path.exists():
+                continue
+
+            if settings.climate_labels:
+                _, climate_label = _split_climate_suffix(scenario, settings.climate_labels)
+                legend_label = climate_label or scenario
+            else:
+                legend_label = scenario
+
+            if legend_label in plotted_labels:
+                continue
+
+            df = pd.read_csv(path)
+            if "year" not in df.columns or "scc_usd_per_tco2" not in df.columns:
+                LOGGER.debug("SCC timeseries %s missing required columns", path)
+                continue
+            df = df.dropna(subset=["scc_usd_per_tco2"])
+            if df.empty:
+                continue
+            df = df.sort_values("year")
+            mask = (df["year"] >= settings.plot_start) & (df["year"] <= settings.plot_end)
+            df = df.loc[mask]
+            if df.empty:
+                continue
+            years = df["year"].astype(int).tolist()
+            values = df["scc_usd_per_tco2"].astype(float).tolist()
+            curves.append((years, values, legend_label))
+            plotted_labels.add(legend_label)
+
+        if not curves:
+            continue
+
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        for years, values, label in curves:
+            ax.plot(years, values, marker="o", linewidth=1.6, label=label)
+        ax.set_xlabel("Year")
+        ax.set_ylabel("SCC (USD/tCO₂)")
+        ax.set_title(f"SCC Timeseries ({method})")
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(
+            output_dir / f"scc_timeseries_{method}.{settings.plot_format}",
+            format=settings.plot_format,
+        )
+        plt.close(fig)
 
 
 def write_plots(
@@ -883,3 +1000,5 @@ def write_plots(
         plot_format=settings.plot_format,
         window=(settings.plot_start, settings.plot_end),
     )
+
+    _plot_scc_timeseries(settings, methods, metrics_map)

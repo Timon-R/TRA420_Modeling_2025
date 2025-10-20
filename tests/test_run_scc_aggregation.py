@@ -79,6 +79,11 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
         "evaluation_scenarios": ["policy"],
         "base_year": 2025,
         "aggregation": "average",
+        "run": {
+            "method": "kernel",
+            "kernel": {},
+            "pulse": {},
+        },
         "methods": {"run": "ramsey_discount"},
         "output_directory": str(output_dir),
         "data_sources": {
@@ -118,4 +123,53 @@ def test_run_scc_aggregation_horizon(
         timeseries = output_dir / "scc_timeseries_ramsey_discount_policy_ssp245.csv"
         assert timeseries.exists()
         df = pd.read_csv(timeseries)
-        assert set(df["year"].astype(int)) == {2025, 2030}
+        assert set(df["year"].astype(int)) == set(range(2025, 2031))
+
+
+def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    config = _build_config(tmp_path, include_horizon=True)
+    config["economic_module"]["run"]["method"] = "pulse"
+    config["economic_module"]["methods"] = {
+        "run": "ramsey_discount",
+        "ramsey_discount": {"rho": 0.01, "eta": 1.0},
+    }
+
+    monkeypatch.setattr(run_scc, "_load_config", lambda: config)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_scc.py", "--run-method", "pulse", "--discount-methods", "ramsey_discount"],
+    )
+
+    run_scc.main()
+    output_dir = Path(config["economic_module"]["output_directory"])
+    base = "ramsey_discount_policy_ssp245"
+
+    primary = output_dir / f"scc_timeseries_{base}.csv"
+    assert primary.exists()
+    primary_df = pd.read_csv(primary)
+    assert set(primary_df["year"].astype(int)) == set(range(2025, 2031))
+
+    pulse_scc = output_dir / f"pulse_scc_timeseries_{base}.csv"
+    pulse_damage = output_dir / f"pulse_emission_damages_{base}.csv"
+    assert pulse_scc.exists()
+    assert pulse_damage.exists()
+
+    pulse_df = pd.read_csv(pulse_scc)
+    assert set(pulse_df.columns) == {
+        "year",
+        "discount_factor",
+        "pv_damage_per_pulse_usd",
+        "scc_usd_per_tco2",
+        "pulse_size_tco2",
+    }
+    assert set(pulse_df["year"].astype(int)) == set(range(2025, 2031))
+
+    damage_df = pd.read_csv(pulse_damage)
+    assert set(damage_df.columns) == {
+        "year",
+        "delta_emissions_tco2",
+        "delta_damage_usd",
+        "pv_delta_damage_usd",
+    }
+    assert set(damage_df["year"].astype(int)) == set(range(2025, 2031))

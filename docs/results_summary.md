@@ -10,6 +10,10 @@ Collects cross‑module indicators and produces a concise overview (text, JSON, 
 - SCC results by method:
   - Per‑year SCC series at configured years when `aggregation: per_year`.
   - Average SCC when `aggregation: average` (uses the configured horizon).
+- Damages derived from SCC × emission deltas for each discounting method. For Ramsey
+  discounting this uses the present-value SCC (base-year USD) multiplied by the
+  emission-year delta (converted to tonnes), so the reported damages are base-year USD
+  PV of the lifetime impact caused by the emissions in that year.
 
 To reduce duplication, plots that do not vary by climate pathway are de‑duplicated:
 - Emission deltas and mortality plots collapse SSP suffixes; each base scenario appears once.
@@ -40,10 +44,16 @@ air‑pollution summaries in `results/air_pollution/<scenario>/`.
 ## Outputs
 
 - `summary.txt` — human‑readable overview for the configured years.
+-   Includes an explicit note clarifying that damages are per emission year and
+    denominated in present-value USD for `economic_module.base_year`.
 - `summary.json` — machine‑readable payload with the same values.
 - `plots/` — grouped bar charts for emission deltas, temperature deltas,
   damages, SCC (one per method), and mortality metrics; plus emission and
   temperature timeseries charts.
+- `scc_summary.csv` now includes a `run_method` column indicating whether SCC
+  results came from the kernel or pulse workflow.
+- When the pulse method is used, `plots/` also receives `scc_timeseries_<method>.png`
+  showing SCC(τ) by scenario (one line per climate pathway).
 
 ## SCC Display Rules
 
@@ -59,4 +69,3 @@ air‑pollution summaries in `results/air_pollution/<scenario>/`.
   like `_ssp119`, `_ssp245`, `_ssp370`.
 - SCC and temperature plots retain climate suffixes because results vary by
   pathway.
-
