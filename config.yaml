@@ -1,14 +1,28 @@
+time_horizon:
+  start: 2025
+  end: 2100
+  step: 5  # Emission reporting grid; FaIR extends beyond this using constant terminal deltas when damage_duration_years demands longer horizons.
+
+calc_emissions:
+  countries:
+    directory: data/calc_emissions/countries
+    pattern: config_{name}.yaml
+    aggregate_output_directory: resources/All_countries
+    aggregate_results_directory: results/emissions/All_countries
+    scenarios:
+      - scenario_1_lower_bound
+      - scenario_1_upper_bound
+    #  - custom_example
+
 climate_module:
   output_directory: results/climate  # Directory for climate results (relative to repository root).
   resource_directory: resources/climate  # Copy of temperature outputs used as shared resources across modules.
   sample_years_option: default  # 'default' (5-year steps to 2050, then 10-year) or 'full'.
-  emission_timeseries_directory: resources  # Folder containing <scenario>_emission_difference.csv (Mt CO₂/yr; negative reduces emissions).
+  emission_timeseries_directory: resources/All_countries  # Folder containing <scenario>/co2.csv (Mt CO₂/yr; output from calc_emissions aggregation).
 
   parameters:
-    start_year: 1750  # Simulation time grid (extend end_year for far-future projections).
-    end_year: 2100
-    timestep: 1.0  # Years per step; 1.0 = annual, 0.25 = quarterly (slower runtime).
-
+    # Time grid inherits from time_horizon and stretches to cover the SCC damage window.
+    # Emission adjustments are held fixed at their terminal value when extrapolating past the reporting horizon.
     climate_setup: ar6  # Options include 'ar6' (default three-layer) and 'two_box'.
     deep_ocean_efficacy: 1.28  # Plausible range 0.5–1.5 (higher slows deep-ocean uptake).
     forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.
@@ -74,22 +88,28 @@ economic_module:
   output_directory: results/economic  # Folder receiving SCC summary, detail, and per-year CSVs.
   gdp_series: null  # Optional override CSV with columns: year, gdp_trillion_usd [, population_million].
   gdp_population_directory: data/GDP_and_Population_data  # Prefers long CSVs (SSP_gdp_long_2020ppp.csv, SSP_population_long.csv); falls back to Excel.
-  temperature_series:  # Absolute/anomaly °C per scenario; keys must match emission_series (use climate-module outputs).
-    baseline: resources/climate/energy_mix_B_ssp245.csv
-    policy: resources/climate/energy_mix_A_ssp245.csv
-  emission_series:  # Annual CO₂ deltas per scenario (use resources/<scenario>/co2.csv with 'delta' column).
-    baseline: resources/energy_mix_B/co2.csv
-    policy: resources/energy_mix_A/co2.csv
+  data_sources:
+    emission_root: resources/All_countries  # Root directory containing <scenario>/co2.csv produced by calc_emissions aggregation.
+    temperature_root: resources/climate  # Directory containing <scenario>_<climate>.csv exported by the climate module.
+    climate_scenarios:
+      - ssp119
+      - ssp245
+      - ssp370
   reference_scenario: baseline  # Baseline label for damage differences.
-  evaluation_scenarios:  # Additional scenarios evaluated by default.
-    - policy
+  evaluation_scenarios:  # Additional scenarios evaluated by default (match calc_emissions scenario names).
+    - scenario_1_lower_bound
+    - scenario_1_upper_bound
   base_year: 2025  # Present-value reference year for discounting (must exist in GDP/temperature grids).
-  aggregation: average  # 'average' (USD/tCO₂) or 'per_year' (time series).
+  damage_duration_years: 300  # Duration (years from start) for SCC damages; must exceed time_horizon span (FaIR runs to start + duration - 1 with constant emission tails).
+  aggregation: per_year  # 'average' (USD/tCO₂) or 'per_year' (time series).
+  aggregation_horizon:
+    start: 2025  # Averaging window start year (required when aggregation == 'average').
+    end: 2050  # Averaging window end year (inclusive).
   emission_column: delta  # Column name in emission CSVs (FaIR export uses 'delta' for Mt CO₂/yr deltas).
   emission_to_tonnes: 1000000.0  # Unit converter for emission_column (1e6 converts Mt → tonnes CO₂).
   damage_function:  # DICE-style quadratic damages configuration.
     delta1: 0.0
-    delta2: 0.002
+    delta2: 0.00236
     use_threshold: false  # true to amplify damages past the threshold temperature.
     threshold_temperature: 3.0  # °C at which threshold amplification starts.
     threshold_scale: 0.2  # Multiplier applied to exceedance when threshold is enabled.
@@ -108,4 +128,13 @@ economic_module:
       discount_rate: 0.03
     ramsey_discount:  # Ramsey: rho = pure time preference, eta = utility elasticity.
       rho: 0.005
-      eta: 1.0
+      eta: 1.5
+
+results:
+  summary:
+    years:  # Key reporting years for summary outputs (includes SCC, damages, emissions, temperature, mortality).
+      - 2030
+      - 2050
+    output_directory: results/summary  # Where summary.txt and plots are written.
+    include_plots: true  # Disable if running in environments without matplotlib.
+    plot_format: png  # File format for bar charts (png, svg, pdf, …).

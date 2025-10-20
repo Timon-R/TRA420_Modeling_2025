@@ -83,6 +83,17 @@ def test_compute_scc_constant_discount(sample_inputs: EconomicInputs):
         damage_kwargs={"delta2": 0.0},
     )
     assert not np.isnan(result.scc_usd_per_tco2)
+    per_year = result.per_year
+    assert "incremental_delta_damage_usd" in per_year.columns
+    assert "discounted_incremental_delta_usd" in per_year.columns
+    np.testing.assert_allclose(
+        per_year["incremental_delta_damage_usd"].iloc[0],
+        per_year["delta_damage_usd"].iloc[0],
+    )
+    np.testing.assert_allclose(
+        per_year["discounted_incremental_delta_usd"].iloc[0],
+        per_year["discounted_delta_usd"].iloc[0],
+    )
 
 
 def test_compute_scc_ramsey_discount(sample_inputs: EconomicInputs):

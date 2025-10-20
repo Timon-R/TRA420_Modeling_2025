@@ -93,7 +93,7 @@ def run_from_config(
 
     output_dir = Path(module_cfg.get("output_directory", "results/air_pollution"))
     if not output_dir.is_absolute():
-        output_dir = ROOT / output_dir
+        output_dir = (config_path.parent / output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fallback_measures = _normalise_measures(

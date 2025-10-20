@@ -82,7 +82,10 @@ factors, and discounted damages in the result details.
 `compute_scc_*` return `SCCResult` containing:
 
 - `scc_usd_per_tco2`: aggregated SCC value.
-- `per_year`: table with year, damage/emission deltas, discount factors, and per-year SCC.
+- `per_year`: table with year, damage/emission deltas, discount factors,
+  incremental damage deltas (year-on-year changes), discounted incremental
+  damages, and the marginal SCC path (`discounted_incremental_delta_usd` divided
+  by the annual emission deltas).
 - `details`: richer diagnostics (e.g., consumption metrics for Ramsey).
 
 ## Usage

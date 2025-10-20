@@ -616,11 +616,20 @@ def _build_per_year_table(
     per_year = damage_df[["year", "delta_damage_usd", "delta_emissions_tco2"]].copy()
     per_year["discount_factor"] = discount_factors
     per_year["discounted_delta_usd"] = per_year["delta_damage_usd"] * discount_factors
+    delta_damage = per_year["delta_damage_usd"].astype(float)
+    incremental_damage = delta_damage.diff()
+    if not incremental_damage.empty:
+        incremental_damage.iloc[0] = delta_damage.iloc[0]
+    per_year["incremental_delta_damage_usd"] = incremental_damage.astype(float)
+    per_year["discounted_incremental_delta_usd"] = (
+        per_year["incremental_delta_damage_usd"] * discount_factors
+    ).astype(float)
+
     with np.errstate(divide="ignore", invalid="ignore"):
         per_year["scc_usd_per_tco2"] = np.divide(
-            per_year["discounted_delta_usd"],
+            per_year["discounted_incremental_delta_usd"],
             per_year["delta_emissions_tco2"],
-            out=np.full_like(per_year["discounted_delta_usd"], np.nan, dtype=float),
+            out=np.full_like(per_year["discounted_incremental_delta_usd"], np.nan, dtype=float),
             where=np.abs(per_year["delta_emissions_tco2"]) > 0,
         )
     return per_year
@@ -666,6 +675,8 @@ def compute_scc_constant_discount(
     damage_df = damage_df.assign(
         discount_factor=factors,
         discounted_delta_usd=per_year["discounted_delta_usd"],
+        incremental_delta_damage_usd=per_year["incremental_delta_damage_usd"],
+        discounted_incremental_delta_usd=per_year["discounted_incremental_delta_usd"],
     )
 
     return SCCResult(
@@ -728,6 +739,8 @@ def compute_scc_ramsey_discount(
         consumption_growth=growth,
         discount_factor=factors,
         discounted_delta_usd=per_year["discounted_delta_usd"],
+        incremental_delta_damage_usd=per_year["incremental_delta_damage_usd"],
+        discounted_incremental_delta_usd=per_year["discounted_incremental_delta_usd"],
     )
 
     return SCCResult(

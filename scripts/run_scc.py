@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterable, Mapping, cast
+from typing import Iterable, Mapping, Sequence, cast
 
 import numpy as np
 import pandas as pd
@@ -79,6 +79,132 @@ def _load_config() -> dict:
         return yaml.safe_load(handle) or {}
 
 
+def _ensure_directory(path: Path, label: str) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"{label} directory not found: {path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"{label} path is not a directory: {path}")
+    return path
+
+
+def _prompt_for_directory(label: str) -> Path:
+    while True:  # pragma: no cover - interactive fallback
+        response = input(f"Enter path to {label}: ").strip()
+        if not response:
+            continue
+        candidate = _resolve_path(response)
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+        print(f"'{candidate}' is not a valid directory. Please try again.")
+
+
+def _default_emission_root(root_cfg: dict) -> Path | None:
+    countries_cfg = root_cfg.get("calc_emissions", {}).get("countries", {})
+    path_str = countries_cfg.get("aggregate_output_directory") or countries_cfg.get(
+        "aggregate_results_directory"
+    )
+    if not path_str:
+        return None
+    return _resolve_path(path_str)
+
+
+def _default_temperature_root(root_cfg: dict) -> Path | None:
+    climate_cfg = root_cfg.get("climate_module", {})
+    path_str = climate_cfg.get("resource_directory") or climate_cfg.get("output_directory")
+    if not path_str:
+        return None
+    return _resolve_path(path_str)
+
+
+def _parse_climate_labels(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        labels = [item.strip() for item in value.split(",") if item.strip()]
+        return labels
+    if isinstance(value, Iterable):
+        labels: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            label = str(item).strip()
+            if label:
+                labels.append(label)
+        return labels
+    return []
+
+
+def _split_climate_suffix(name: str, climate_labels: Sequence[str]) -> tuple[str, str | None]:
+    for label in sorted({cl.strip() for cl in climate_labels if cl}, key=len, reverse=True):
+        suffix = f"_{label}"
+        if name.endswith(suffix):
+            return name[: -len(suffix)], label
+    return name, None
+
+
+def _restrict_inputs_window(
+    inputs: EconomicInputs, start_year: int, end_year: int
+) -> EconomicInputs:
+    years = inputs.years.astype(int)
+    current_start = int(years.min())
+    current_end = int(years.max())
+
+    if start_year < current_start:
+        raise ValueError(
+            f"SCC inputs start at {current_start} but requested window begins at {start_year}."
+        )
+
+    gdp = inputs.gdp_trillion_usd
+    population = inputs.population_million
+    temp_series = dict(inputs.temperature_scenarios_c)
+    emission_series = dict(inputs.emission_scenarios_tco2)
+
+    if end_year > current_end:
+        extra_years = np.arange(current_end + 1, end_year + 1, dtype=int)
+        if extra_years.size:
+            years = np.concatenate([years, extra_years])
+            gdp_extension = np.full(extra_years.shape, gdp[-1], dtype=float)
+            gdp = np.concatenate([gdp, gdp_extension])
+
+            if population is not None:
+                pop_extension = np.full(extra_years.shape, population[-1], dtype=float)
+                population = np.concatenate([population, pop_extension])
+
+            for name, series in temp_series.items():
+                extension = np.full(extra_years.shape, series[-1], dtype=float)
+                temp_series[name] = np.concatenate([series, extension])
+
+            for name, series in emission_series.items():
+                extension = np.full(extra_years.shape, series[-1], dtype=float)
+                emission_series[name] = np.concatenate([series, extension])
+
+    mask = (years >= start_year) & (years <= end_year)
+    if not mask.any():
+        raise ValueError(
+            f"No data available between {start_year} and {end_year} for SCC calculation."
+        )
+
+    selected_years = years[mask]
+    gdp_selected = gdp[mask]
+    population_selected = population[mask] if population is not None else None
+    temperatures = {label: series[mask] for label, series in temp_series.items()}
+    emissions = {label: series[mask] for label, series in emission_series.items()}
+
+    climate_scenarios = None
+    if inputs.climate_scenarios:
+        climate_scenarios = dict(inputs.climate_scenarios)
+
+    return EconomicInputs(
+        years=selected_years,
+        gdp_trillion_usd=gdp_selected,
+        temperature_scenarios_c=temperatures,
+        emission_scenarios_tco2=emissions,
+        population_million=population_selected,
+        climate_scenarios=climate_scenarios,
+        ssp_family=inputs.ssp_family,
+    )
+
+
 def _default_methods(cfg: dict) -> list[str]:
     methods_cfg = cfg.get("methods", {})
     run = methods_cfg.get("run")
@@ -93,7 +219,7 @@ def _default_methods(cfg: dict) -> list[str]:
     return AVAILABLE_METHODS
 
 
-def _build_parser(cfg: dict) -> argparse.ArgumentParser:
+def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
     gdp_default = cfg.get("gdp_series")
     gdp_pop_dir_default = cfg.get("gdp_population_directory", "data/GDP_and_Population_data")
     base_year_default = int(cfg.get("base_year", 2025))
@@ -115,18 +241,47 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
     damage_disaster_fraction_default = float(damage_cfg.get("disaster_fraction", 0.75))
     damage_disaster_gamma_default = float(damage_cfg.get("disaster_gamma", 1.0))
     damage_disaster_mode_default = str(damage_cfg.get("disaster_mode", "prob")).lower()
+    aggregation_horizon_cfg = cfg.get("aggregation_horizon", {}) or {}
+    aggregation_start_default = aggregation_horizon_cfg.get("start")
+    aggregation_end_default = aggregation_horizon_cfg.get("end")
+
+    data_sources_cfg = cfg.get("data_sources", {}) or {}
+    emission_root_default = data_sources_cfg.get("emission_root")
+    temperature_root_default = data_sources_cfg.get("temperature_root")
+
+    climate_defaults_cfg = data_sources_cfg.get("climate_scenarios")
+    if climate_defaults_cfg:
+        climate_label_default = ",".join(
+            str(item).strip() for item in climate_defaults_cfg if str(item).strip()
+        )
+    else:
+        climate_single_default = data_sources_cfg.get("climate_scenario")
+        if climate_single_default is not None:
+            climate_label_default = str(climate_single_default).strip()
+        else:
+            climate_defs = (
+                root_cfg.get("climate_module", {})
+                .get("climate_scenarios", {})
+                .get("definitions", [])
+            )
+            if climate_defs:
+                first_def = climate_defs[0]
+                climate_label_default = (
+                    first_def.get("label") or first_def.get("id") or ""
+                ).strip()
+            else:
+                climate_label_default = ""
 
     parser = argparse.ArgumentParser(
         description=(
-            "Calculate SCC for temperature/emission scenarios relative to a " "reference pathway."
+            "Calculate SCC for temperature/emission scenarios relative to a reference pathway."
         )
     )
     parser.add_argument(
         "--temperature",
         action="append",
         help=(
-            "Temperature series specification as 'label=path/to.csv'. Provide at "
-            "least two entries."
+            "Temperature series specification as 'label=path/to.csv'. Provide at least two entries."
         ),
     )
     parser.add_argument(
@@ -190,6 +345,49 @@ def _build_parser(cfg: dict) -> argparse.ArgumentParser:
         choices=AVAILABLE_AGGREGATIONS,
         default=aggregation_default,
         help="Return per-year SCC values or the aggregated average (default from config).",
+    )
+    parser.add_argument(
+        "--emission-root",
+        help=(
+            "Root directory containing <scenario>/co2.csv emission deltas "
+            "(defaults to economic_module.data_sources.emission_root)."
+        ),
+        default=emission_root_default,
+    )
+    parser.add_argument(
+        "--temperature-root",
+        help=(
+            "Directory containing climate CSVs named <scenario>_<climate>.csv "
+            "(defaults to economic_module.data_sources.temperature_root)."
+        ),
+        default=temperature_root_default,
+    )
+    parser.add_argument(
+        "--climate-scenario",
+        help=(
+            "Climate scenario label(s) to pair with emission deltas (comma-separated). "
+            "Defaults to economic_module.data_sources.climate_scenarios or the first "
+            "climate definition."
+        ),
+        default=climate_label_default,
+    )
+    parser.add_argument(
+        "--aggregation-start",
+        type=int,
+        default=aggregation_start_default,
+        help=(
+            "First year included when aggregation=='average'. "
+            "Overrides economic_module.aggregation_horizon.start."
+        ),
+    )
+    parser.add_argument(
+        "--aggregation-end",
+        type=int,
+        default=aggregation_end_default,
+        help=(
+            "Final year (inclusive) when aggregation=='average'. "
+            "Overrides economic_module.aggregation_horizon.end."
+        ),
     )
     parser.add_argument(
         "--discount-rate",
@@ -419,9 +617,10 @@ def _select_targets(
 
 
 def main() -> None:
-    config = _load_config().get("economic_module", {})
+    root_cfg = _load_config()
+    config = root_cfg.get("economic_module", {})
 
-    parser = _build_parser(config)
+    parser = _build_parser(config, root_cfg)
     args = parser.parse_args()
 
     if args.list_methods:
@@ -437,22 +636,187 @@ def main() -> None:
     if not methods:
         parser.error("No valid SCC methods selected.")
 
-    try:
-        temperature_sources = _collect_sources(
-            args.temperature, config.get("temperature_series"), minimum=2, label="temperature"
+    time_horizon_cfg = root_cfg.get("time_horizon", {})
+    horizon_start = int(time_horizon_cfg.get("start", args.base_year))
+    if args.base_year != horizon_start:
+        parser.error(
+            "economic_module.base_year must match time_horizon.start "
+            f"(currently {args.base_year} vs {horizon_start})."
         )
-        emission_sources = _collect_sources(
-            args.emission, config.get("emission_series"), minimum=2, label="emission"
+
+    try:
+        manual_temperature = _collect_sources(
+            args.temperature, config.get("temperature_series"), minimum=0, label="temperature"
+        )
+        manual_emission = _collect_sources(
+            args.emission, config.get("emission_series"), minimum=0, label="emission"
         )
     except ValueError as exc:
         parser.error(str(exc))
 
-    if set(temperature_sources) != set(emission_sources):
-        parser.error("Temperature and emission scenario labels must match.")
+    temperature_sources: dict[str, Path]
+    emission_sources: dict[str, Path]
+    reference_lookup: dict[str, str] = {}
+    scenario_groups: list[dict[str, object]] = []
 
-    reference = _select_reference(args, config, temperature_sources.keys())
-    targets = _select_targets(args, config, temperature_sources.keys(), reference)
-    if not targets:
+    if manual_temperature or manual_emission:
+        if not manual_temperature or not manual_emission:
+            parser.error(
+                "Provide both --temperature and --emission mappings when specifying manually."
+            )
+        if set(manual_temperature) != set(manual_emission):
+            parser.error("Temperature and emission scenario labels must match.")
+        temperature_sources = manual_temperature
+        emission_sources = manual_emission
+        reference = _select_reference(args, config, temperature_sources.keys())
+        targets = _select_targets(args, config, temperature_sources.keys(), reference)
+        if not targets:
+            parser.error("No target scenarios selected for evaluation.")
+        reference_lookup[reference] = reference
+        for scenario in targets:
+            reference_lookup[scenario] = reference
+        scenario_groups.append(
+            {
+                "reference": reference,
+                "targets": targets,
+                "temperature": temperature_sources,
+                "emission": emission_sources,
+                "ref_map": dict(reference_lookup),
+            }
+        )
+    else:
+        data_sources_cfg = config.get("data_sources", {}) or {}
+        reference_default = str(
+            args.reference_scenario or config.get("reference_scenario") or "baseline"
+        )
+        evaluation_cfg = config.get("evaluation_scenarios") or []
+        if isinstance(evaluation_cfg, str):
+            evaluation_cfg = [evaluation_cfg]
+        base_scenarios = [reference_default, *map(str, evaluation_cfg)]
+        base_scenarios = [name for name in base_scenarios if name]
+        base_scenarios = list(dict.fromkeys(base_scenarios))
+        if len(base_scenarios) < 2:
+            parser.error("Provide at least one evaluation scenario besides the reference.")
+
+        climate_inputs = _parse_climate_labels(args.climate_scenario)
+        if not climate_inputs:
+            climate_inputs = _parse_climate_labels(data_sources_cfg.get("climate_scenarios"))
+        if not climate_inputs:
+            single_climate = data_sources_cfg.get("climate_scenario")
+            if single_climate:
+                climate_inputs = [str(single_climate).strip()]
+        if not climate_inputs:
+            climate_defs = (
+                root_cfg.get("climate_module", {})
+                .get("climate_scenarios", {})
+                .get("definitions", [])
+            )
+            if climate_defs:
+                first_def = climate_defs[0]
+                fallback = first_def.get("label") or first_def.get("id")
+                if fallback:
+                    climate_inputs = [str(fallback).strip()]
+        climate_inputs = [label for label in climate_inputs if label]
+        if not climate_inputs:
+            parser.error("Unable to determine climate scenario labels.")
+
+        emission_root_input = args.emission_root or data_sources_cfg.get("emission_root")
+        emission_root_path: Path | None = None
+        if emission_root_input:
+            emission_candidate = _resolve_path(emission_root_input)
+            if emission_candidate.exists():
+                emission_root_path = emission_candidate
+        if emission_root_path is None:
+            default_emission_root = _default_emission_root(root_cfg)
+            if default_emission_root and default_emission_root.exists():
+                emission_root_path = default_emission_root
+        if emission_root_path is None:
+            emission_root_path = _prompt_for_directory("emission delta root")  # pragma: no cover
+        emission_root_path = _ensure_directory(emission_root_path, "emission delta root")
+
+        temperature_root_input = args.temperature_root or data_sources_cfg.get("temperature_root")
+        temperature_root_path: Path | None = None
+        if temperature_root_input:
+            temperature_candidate = _resolve_path(temperature_root_input)
+            if temperature_candidate.exists():
+                temperature_root_path = temperature_candidate
+        if temperature_root_path is None:
+            default_temperature_root = _default_temperature_root(root_cfg)
+            if default_temperature_root and default_temperature_root.exists():
+                temperature_root_path = default_temperature_root
+        if temperature_root_path is None:
+            temperature_root_path = _prompt_for_directory(
+                "temperature results directory"
+            )  # pragma: no cover
+        temperature_root_path = _ensure_directory(temperature_root_path, "temperature root")
+
+        emission_sources = {}
+        temperature_sources = {}
+        for climate_label in climate_inputs:
+            reference_label = f"{reference_default}_{climate_label}"
+            reference_lookup[reference_label] = reference_label
+            emission_path = (emission_root_path / reference_default / "co2.csv").resolve()
+            if not emission_path.exists():
+                parser.error(
+                    "Emission delta file not found for scenario "
+                    f"'{reference_default}' under {emission_root_path}."
+                )
+            emission_sources[reference_label] = emission_path
+            temp_filename = f"{reference_default}_{climate_label}.csv"
+            temp_path = (temperature_root_path / temp_filename).resolve()
+            if not temp_path.exists():
+                parser.error(
+                    f"Temperature file '{temp_filename}' not found in {temperature_root_path}."
+                )
+            temperature_sources[reference_label] = temp_path
+
+            for base in base_scenarios:
+                if base == reference_default:
+                    continue
+                combo_label = f"{base}_{climate_label}"
+                emission_path = (emission_root_path / base / "co2.csv").resolve()
+                if not emission_path.exists():
+                    parser.error(
+                        "Emission delta file not found for scenario "
+                        f"'{base}' under {emission_root_path}."
+                    )
+                emission_sources[combo_label] = emission_path
+                temp_path = (temperature_root_path / f"{base}_{climate_label}.csv").resolve()
+                if not temp_path.exists():
+                    parser.error(
+                        "Temperature file "
+                        f"'{base}_{climate_label}.csv' not found in {temperature_root_path}."
+                    )
+                temperature_sources[combo_label] = temp_path
+                reference_lookup[combo_label] = reference_label
+        for climate_label in climate_inputs:
+            suffix = f"_{climate_label}"
+            reference_label = f"{reference_default}_{climate_label}"
+            temp_subset = {
+                name: path for name, path in temperature_sources.items() if name.endswith(suffix)
+            }
+            if not temp_subset:
+                continue
+            if reference_label not in temp_subset:
+                parser.error(
+                    f"Temperature data missing for reference scenario '{reference_label}'."
+                )
+            emission_subset = {name: emission_sources[name] for name in temp_subset}
+            targets = [name for name in temp_subset if name != reference_label]
+            if not targets:
+                parser.error(f"No evaluation scenarios found for climate '{climate_label}'.")
+            ref_map = {name: reference_lookup.get(name, reference_label) for name in temp_subset}
+            scenario_groups.append(
+                {
+                    "reference": reference_label,
+                    "targets": targets,
+                    "temperature": temp_subset,
+                    "emission": emission_subset,
+                    "ref_map": ref_map,
+                }
+            )
+
+    if not scenario_groups:
         parser.error("No target scenarios selected for evaluation.")
 
     gdp_path = _resolve_path(args.gdp_csv) if args.gdp_csv else None
@@ -460,21 +824,14 @@ def main() -> None:
         _resolve_path(args.gdp_population_directory) if args.gdp_population_directory else None
     )
 
-    inputs = EconomicInputs.from_csv(
-        temperature_sources,
-        emission_sources,
-        gdp_path,
-        temperature_column=args.temperature_column,
-        emission_column=args.emission_column,
-        emission_to_tonnes=args.emission_unit_multiplier,
-        gdp_population_directory=gdp_population_directory,
-    )
-
     output_dir = _resolve_path(args.output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    summary_rows = []
     aggregation = cast(SCCAggregation, args.aggregation)
+    agg_start = args.aggregation_start
+    agg_end = args.aggregation_end
+
+    summary_rows = []
     damage_kwargs = {
         "delta1": args.damage_delta1,
         "delta2": args.damage_delta2,
@@ -492,54 +849,129 @@ def main() -> None:
         "disaster_mode": args.damage_disaster_mode,
     }
 
-    for scenario in targets:
-        for method in methods:
-            kwargs = {
-                "scenario": scenario,
-                "reference": reference,
-                "base_year": args.base_year,
-                "aggregation": aggregation,
-                "add_tco2": args.add_tco2,
-                "damage_kwargs": damage_kwargs,
-            }
-            if method == "constant_discount":
-                kwargs["discount_rate"] = args.discount_rate
-            elif method == "ramsey_discount":
-                kwargs["rho"] = args.rho
-                kwargs["eta"] = args.eta
+    for group in scenario_groups:
+        temp_subset = cast(dict[str, Path], group["temperature"])
+        emission_subset = cast(dict[str, Path], group["emission"])
+        reference_label = cast(str, group["reference"])
+        targets = cast(list[str], group["targets"])
+        ref_map = cast(dict[str, str], group["ref_map"])
 
-            result = compute_scc(inputs, method, **kwargs)
+        inputs = EconomicInputs.from_csv(
+            temp_subset,
+            emission_subset,
+            gdp_path,
+            temperature_column=args.temperature_column,
+            emission_column=args.emission_column,
+            emission_to_tonnes=args.emission_unit_multiplier,
+            gdp_population_directory=gdp_population_directory,
+        )
 
-            safe_name = _safe_name(scenario)
-            details_path = output_dir / f"scc_{method}_{safe_name}.csv"
-            result.details.to_csv(details_path, index=False)
+        working_inputs = inputs
+        damage_duration_years = config.get("damage_duration_years")
+        if damage_duration_years is not None:
+            try:
+                damage_duration = int(damage_duration_years)
+            except (TypeError, ValueError):
+                parser.error("damage_duration_years must be an integer number of years.")
+            if damage_duration <= 0:
+                parser.error("damage_duration_years must be positive.")
+            start_year = int(time_horizon_cfg.get("start", int(working_inputs.years.min())))
+            if "start" in time_horizon_cfg and "end" in time_horizon_cfg:
+                horizon_span = int(time_horizon_cfg["end"]) - int(time_horizon_cfg["start"])
+                if damage_duration <= horizon_span:
+                    parser.error("damage_duration_years must exceed the time_horizon span.")
+            target_end = start_year + damage_duration - 1
+            try:
+                working_inputs = _restrict_inputs_window(working_inputs, start_year, target_end)
+            except ValueError as exc:
+                parser.error(str(exc))
 
-            timeseries_path = output_dir / f"scc_timeseries_{method}_{safe_name}.csv"
-            result.per_year.to_csv(timeseries_path, index=False)
+        if aggregation == "average":
+            if agg_start is None or agg_end is None:
+                parser.error(
+                    "When aggregation=='average', provide aggregation_horizon start and end."
+                )
+            try:
+                agg_start_int = int(agg_start)
+                agg_end_int = int(agg_end)
+            except (TypeError, ValueError):
+                parser.error("Aggregation horizon years must be integers.")
+            if agg_start_int > agg_end_int:
+                parser.error("aggregation_horizon.start must be <= aggregation_horizon.end.")
+            if agg_start_int < int(working_inputs.years.min()) or agg_end_int > int(
+                working_inputs.years.max()
+            ):
+                parser.error(
+                    "Aggregation horizon "
+                    f"{agg_start_int}-{agg_end_int} falls outside available data "
+                    f"({working_inputs.years[0]}-{working_inputs.years[-1]})."
+                )
+            if not (agg_start_int <= args.base_year <= agg_end_int):
+                parser.error(
+                    f"Base year {args.base_year} must lie within aggregation "
+                    f"horizon {agg_start_int}-{agg_end_int}."
+                )
+            try:
+                working_inputs = _restrict_inputs_window(working_inputs, agg_start_int, agg_end_int)
+            except ValueError as exc:
+                parser.error(str(exc))
 
-            summary_rows.append(
-                {
+        if args.base_year not in set(working_inputs.years.tolist()):
+            parser.error(
+                f"Base year {args.base_year} is outside the SCC evaluation window "
+                f"({working_inputs.years[0]}-{working_inputs.years[-1]})."
+            )
+
+        for scenario in targets:
+            scenario_reference = ref_map.get(scenario, reference_label)
+            for method in methods:
+                kwargs = {
                     "scenario": scenario,
-                    "reference": reference,
-                    "method": method,
+                    "reference": scenario_reference,
+                    "base_year": args.base_year,
                     "aggregation": aggregation,
-                    "scc_usd_per_tco2": result.scc_usd_per_tco2,
-                    "base_year": result.base_year,
-                    "total_delta_emissions_tco2": result.add_tco2,
-                    "discount_rate": args.discount_rate
-                    if method == "constant_discount"
-                    else np.nan,
-                    "rho": args.rho if method == "ramsey_discount" else np.nan,
-                    "eta": args.eta if method == "ramsey_discount" else np.nan,
+                    "add_tco2": args.add_tco2,
+                    "damage_kwargs": damage_kwargs,
                 }
-            )
+                if method == "constant_discount":
+                    kwargs["discount_rate"] = args.discount_rate
+                elif method == "ramsey_discount":
+                    kwargs["rho"] = args.rho
+                    kwargs["eta"] = args.eta
 
-            print(
-                f"[{method}] {scenario} vs {reference}: {result.scc_usd_per_tco2:,.2f} USD/tCO2 "
-                f"(aggregation {aggregation}, base year {result.base_year})"
-            )
-            print(f"  Details written to {_format_path(details_path)}")
-            print(f"  SCC time series written to {_format_path(timeseries_path)}")
+                result = compute_scc(working_inputs, method, **kwargs)
+
+                safe_name = _safe_name(scenario)
+                details_path = output_dir / f"scc_{method}_{safe_name}.csv"
+                result.details.to_csv(details_path, index=False)
+
+                timeseries_path = output_dir / f"scc_timeseries_{method}_{safe_name}.csv"
+                result.per_year.to_csv(timeseries_path, index=False)
+
+                summary_rows.append(
+                    {
+                        "scenario": scenario,
+                        "reference": scenario_reference,
+                        "method": method,
+                        "aggregation": aggregation,
+                        "scc_usd_per_tco2": result.scc_usd_per_tco2,
+                        "base_year": result.base_year,
+                        "total_delta_emissions_tco2": result.add_tco2,
+                        "discount_rate": args.discount_rate
+                        if method == "constant_discount"
+                        else np.nan,
+                        "rho": args.rho if method == "ramsey_discount" else np.nan,
+                        "eta": args.eta if method == "ramsey_discount" else np.nan,
+                    }
+                )
+
+                print(
+                    f"[{method}] {scenario} vs {scenario_reference}: "
+                    f"{result.scc_usd_per_tco2:,.2f} USD/tCO2 (aggregation {aggregation}, "
+                    f"base year {result.base_year})"
+                )
+                print(f"  Details written to {_format_path(details_path)}")
+                print(f"  SCC time series written to {_format_path(timeseries_path)}")
 
     summary = pd.DataFrame(summary_rows)
     summary_path = output_dir / "scc_summary.csv"

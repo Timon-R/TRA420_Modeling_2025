@@ -15,7 +15,8 @@ temperature responses, and evaluating local/global impact metrics such as the So
   - `pattern_scaling/` — pattern-scaling of global responses to country trajectories.
   - *(planned)* `impacts/`, `ui/`, `common/` packages that will divide the workflow into focused modules as they arrive.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
-- `data/` — input datasets (raw and processed). Keep large files out of version control when possible.
+- `data/` — input datasets (raw and processed). Includes `calc_emissions/` (country configs and
+  emission factors), air-pollution statistics, GDP/Population tables, and pattern-scaling factors.
 - `resources/` — emission-difference scenario folders (e.g. `<scenario>/co2.csv`, Mt CO₂/yr); used by the climate runner and ignored by Git.
 - `results/` — generated outputs like climate CSVs (ignored by Git).
 - `tests/` — pytest suite covering emissions, climate, economic, and pattern-scaling modules.
@@ -44,7 +45,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 ### Electricity emissions per country
 
-Run the calculator for one country (writes deltas under that country's resources folder):
+Run the calculator for one country (writes deltas under that country's resources folder). Country names correspond to `config_<name>.yaml` files in `data/calc_emissions/countries/`:
 
 ```bash
 python scripts/run_calc_emissions.py --country Albania
@@ -68,16 +69,25 @@ Options:
   python scripts/run_calc_emissions_all.py --countries Albania Serbia
   ```
 
-- Choose a different output directory:
+- Choose a different output directory or mirror results elsewhere:
 
   ```bash
-  python scripts/run_calc_emissions_all.py --output resources/All_countries_custom
+  python scripts/run_calc_emissions_all.py --output resources/All_countries_custom --results-output results/emissions/All_countries_custom
   ```
 
-Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `sox.csv`, `pm25.csv`, and `gwp100.csv` when available) with columns `year,delta` in Mt/year.
+Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `sox.csv`, `pm25.csv`, and `gwp100.csv` when available) with columns `year,delta` in Mt/year. The list of country configs, scenario filter, and the default aggregate output directories (resources/results) are configurable via the `calc_emissions.countries` block in `config.yaml`.
+
+### Full end-to-end run
+
+To execute emissions, climate, pattern scaling, air-pollution and SCC modules in a single command (using the defaults from `config.yaml`):
+
+```bash
+python scripts/run_full_pipeline.py
+```
+
 Typical workflow (driven by `config.yaml`):
 
-1. **Emissions** – `python scripts/run_calc_emissions.py` (optional; prepares `resources/<scenario>/co2.csv`).
+1. **Emissions** – `python scripts/run_calc_emissions.py --country <name>` (per-country deltas) or `python scripts/run_calc_emissions_all.py` (aggregated deltas); run before downstream modules so `resources/calc_emissions/`, `resources/<scenario>/`, and `resources/All_countries/` hold current data.
 2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate mortality percentage changes.
 3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column.
 4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
@@ -147,24 +157,28 @@ Individual modules can be exercised via `python -m pytest tests/test_calc_emissi
 
 All runtime settings live in `config.yaml`.
 
+- `time_horizon`
+  - Shared `{start, end, step}` used across calc-emissions, climate, and downstream modules. The climate runner upgrades this window to annual resolution automatically.
+
 - `calc_emissions`
-  - Defines electricity demand/mix scenarios and converts them into Mt CO₂/yr deltas.
+  - Defines electricity demand/mix scenarios and converts them into Mt/year deltas for CO₂, SOₓ, NOₓ, PM₂.₅ (and optional GWP100).
   - Key subsections:
-    - `years`: simulation horizon (`start`, `end`, `step`).
-    - `emission_factors_file`: CSV with technology factors (CO₂ in Mt/TWh; SO₂/NOₓ/PM₂.₅ in kt/TWh). The calculator converts non-CO₂ pollutants to Mt/year when writing outputs.
+    - `emission_factors_file`: CSV with a `technology` column and pollutant intensities (`*_kg_per_kwh`, `*_mt_per_twh`, etc.); values are harmonised to Mt/TWh.
     - `demand_scenarios` / `mix_scenarios`: named templates used by `baseline` and entries in `scenarios`.
     - `baseline`: reference demand + mix used to compute differences.
     - `scenarios`: list of electricity cases. Each entry can reference a named scenario or supply `*_custom` mappings.
-    - Outputs one folder per scenario in the configured directory (default `resources/`). Files include `co2.csv`, `so2.csv`, `nox.csv`, `pm25.csv` with Mt/year deltas; the climate module consumes `co2.csv` while the others support air-pollution analysis.
+    - `countries`: metadata pointing to per-country configs, aggregate output folders, optional notes file, and the shared scenario filter (names must exist in every country file).
+    - Outputs one folder per scenario in the configured directory (default `resources/calc_emissions`). Files include `co2.csv`, `sox.csv`, `nox.csv`, `pm25.csv`, `gwp100.csv` (when available); the climate module consumes `co2.csv` while the others support air-pollution analysis.
 
 - `climate_module`
   - Consumes emission-difference files and runs FaIR temperature responses.
   - Key options:
     - `output_directory`: where summary CSVs are written (`results/climate` by default).
     - `sample_years_option`: `default` (5-year to 2050, then 10-year) or `full` (every year 2025–2100).
-    - `parameters`: global FaIR settings; includes time grid (`start_year`, `end_year`, `timestep`) and climate overrides (`deep_ocean_efficacy`, `forcing_4co2`, `equilibrium_climate_sensitivity`).
+    - `parameters`: global FaIR settings (e.g. `deep_ocean_efficacy`, `forcing_4co2`, `equilibrium_climate_sensitivity`). Start/end years inherit from `time_horizon`, always run at 1-year steps.
     - `climate_scenarios`: SSP pathways to run (use `run: all` or list of IDs) with per-pathway tweaks.
     - `emission_scenarios`: which emission scenario folders in `resources/` to process (`all` or list of folder names). Only `co2.csv` feeds FaIR; other pollutant files are optional analytics inputs.
+    - When `economic_module.damage_duration_years` exceeds the emission horizon, FaIR extends its run to `start + duration - 1` and holds the terminal emission delta constant.
 
 - `pattern_scaling`
   - Consumes global climate CSVs and applies country-specific pattern-scaling coefficients.
@@ -174,21 +188,25 @@ All runtime settings live in `config.yaml`.
     - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`, `pop.2100`).
     - `countries`: ISO3 codes to generate outputs for.
   - Matches climate scenarios using the first four characters of each `climate_module.climate_scenarios.definitions[*].id` or the `climate_scenario` column injected into climate CSVs.
-  - `air_pollution`
-    - Translates emission changes for PM₂.₅ and NOₓ into mortality percentage differences by scaling baseline concentrations with emission ratios.
-    - Key options:
-      - `output_directory`: where health-impact CSVs are written (`results/air_pollution` by default).
-      - `concentration_measure`: preferred statistic (`median`, `mean`, etc.); the module falls back through `concentration_fallback_order` if the field is missing in the data.
-      - `country_weights`: weighting used when averaging country-level responses (`equal` or a mapping `{Country: weight}`, normalised automatically; can be overridden per pollutant).
-      - `pollutants`: per-pollutant overrides (stats file, `relative_risk` or `beta`, reference concentration delta).
-        Use `baseline_deaths` to convert percentage changes into annual death deltas (`per_year` or `total`
-        plus `years`/`span`); a module-level `baseline_deaths` entry applies to the combined total,
-        optionally weighted by `weights`.
-      - `scenarios`: `all` or a list of emission scenario names to evaluate.
-    - Outputs include one `*_health_impact.csv` per pollutant plus optional `*_mortality_summary.csv`
-      (if baseline deaths are configured) and a combined `total_mortality_summary.csv` aggregating all pollutants.
+
+- `air_pollution`
+  - Translates emission changes for PM₂.₅ and NOₓ into mortality percentage differences by scaling baseline concentrations with emission ratios.
+  - Key options:
+    - `output_directory`: where health-impact CSVs are written (`results/air_pollution` by default).
+    - `concentration_measure`: preferred statistic (`median`, `mean`, etc.); the module falls back through `concentration_fallback_order` if the field is missing in the data.
+    - `country_weights`: weighting used when averaging country-level responses (`equal` or a mapping `{Country: weight}`, normalised automatically; can be overridden per pollutant).
+    - `pollutants`: per-pollutant overrides (stats file, `relative_risk` or `beta`, reference concentration delta). Use `baseline_deaths` to convert percentage changes into annual death deltas (`per_year` or `total` plus `years`/`span`); a module-level `baseline_deaths` entry applies to the combined total, optionally weighted by `weights`.
+    - `scenarios`: `all` or a list of emission scenario names to evaluate.
+  - Outputs include one `*_health_impact.csv` per pollutant plus optional `*_mortality_summary.csv` (if baseline deaths are configured) and a combined `total_mortality_summary.csv` aggregating all pollutants.
+
 - `economic_module`
   - Computes SCC by combining temperature, emission, and GDP series.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.
   - `damage_function` now supports optional threshold amplification, smooth saturation, and catastrophic add-ons in addition to the DICE quadratic terms (`delta1`, `delta2`). Tune behaviour via keys such as `use_threshold`, `threshold_temperature`, `use_saturation`, `max_fraction`, `use_catastrophic`, and related parameters (see `config.yaml`).
   - Temperature CSVs export a `climate_scenario` column; the SCC runner reads it to select the matching SSP GDP/population series from `gdp_population_directory` (workbooks `GDP_SSP1_5.xlsx` and `POP_SSP1_5.xlsx`). Set `gdp_series` to a custom CSV only when overriding the SSP datasets.
+  - `damage_duration_years` extends the SCC damage window beyond the shared time horizon (starting at the global start year); datasets must supply values through the requested end year, and the climate module reuses the last available emission delta during the tail.
+  - `data_sources.emission_root` and `data_sources.temperature_root` should target the intermediate `resources/` products (`resources/All_countries/<scenario>/co2.csv` and `resources/climate/<scenario>_<climate>.csv`). `data_sources.climate_scenario` selects which climate pathway to pair with each emission scenario when the SCC module is run without explicit file listings.
+  - When `aggregation` is set to `average`, provide `aggregation_horizon` (`start`, `end`) to bound the averaging window. The CLI enforces this so you always know which portion of the timeline feeds the aggregate SCC.
+- `results`
+  - `summary` collects cross-module indicators (SCC, damages, temperature and emission deltas, mortality impacts) for configured years and writes `summary.txt` plus optional comparison bar charts to `output_directory`.
+  - Toggle `include_plots` to disable chart generation (useful on headless systems) or change `plot_format` for publication-ready graphics.

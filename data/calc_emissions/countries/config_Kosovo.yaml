@@ -1,11 +1,6 @@
-
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Kosovo.csv
-  output_directory: resources/Kosovo
-  years:
-    start: 2025
-    end: 2100
-    step: 5
+  emission_factors_file: data/calc_emissions/countries/emission_factors_Kosovo.csv
+  output_directory: resources/calc_emissions/Kosovo
   demand_scenarios:
     reference:
       description: Kosovo reference demand (TWh).
@@ -29,25 +24,25 @@ calc_emissions:
     reference:
       description: Balanced mix with gradual decarbonisation.
       shares:
-        coal: 0.70
-        gas: 0.10
-        hydro: 0.10
+        coal: 0.7
+        gas: 0.1
+        hydro: 0.1
         wind: 0.05
         solar: 0.05
     renewables_push:
       description: Accelerated deployment of wind and solar.
       shares:
-        coal: 0.30
-        gas: 0.10
-        hydro: 0.30
+        coal: 0.3
+        gas: 0.1
+        hydro: 0.3
         wind: 0.15
-        solar: 0.10
+        solar: 0.1
         biomass: 0.05
     fossil_lockin:
       description: Slower transition away from fossil generation.
       shares:
-        coal: 0.80
-        gas: 0.10
+        coal: 0.8
+        gas: 0.1
         hydro: 0.05
         wind: 0.03
         solar: 0.02
@@ -55,27 +50,28 @@ calc_emissions:
     demand_scenario: reference
     mix_scenario: reference
   scenarios:
-    - name: scenario_1_lower_bound
-      demand_scenario: lower_bound
-      mix_scenario: reference
-    - name: scenario_1_upper_bound
-      demand_scenario: upper_bound
-      mix_scenario: reference
-    - name: custom_example
-      demand_custom:
-        2025: 11
-        2030: 13
-        2040: 15
-        2050: 17
-        2060: 19
-        2070: 21
-        2080: 23
-        2090: 25
-        2100: 27
-      mix_custom:
-        shares:
-          coal: 0.50
-          gas: 0.10
-          hydro: 0.30
-          wind: 0.05
-          solar: 0.05
+  - name: scenario_1_lower_bound
+    demand_scenario: lower_bound
+    mix_scenario: reference
+  - name: scenario_1_upper_bound
+    demand_scenario: upper_bound
+    mix_scenario: reference
+  - name: custom_example
+    demand_custom:
+      2025: 11
+      2030: 13
+      2040: 15
+      2050: 17
+      2060: 19
+      2070: 21
+      2080: 23
+      2090: 25
+      2100: 27
+    mix_custom:
+      shares:
+        coal: 0.5
+        gas: 0.1
+        hydro: 0.3
+        wind: 0.05
+        solar: 0.05
+  results_directory: results/emissions/Kosovo

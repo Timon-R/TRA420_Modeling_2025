@@ -1,7 +1,7 @@
 ## Notes on emissions factors (20251005)
 
 # Names of activities in Ecoinvent 3.10.1 - cutoff
-- See `Emission_factors_all.xlsx`
+- See `data/calc_emissions/Emission_factors_all.xlsx`
 - 
 
 # Names of emissions/impacts categories

@@ -1,10 +1,6 @@
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Montenegro.csv
-  output_directory: resources/Montenegro
-  years:
-    start: 2025
-    end: 2100
-    step: 5
+  emission_factors_file: data/calc_emissions/countries/emission_factors_Montenegro.csv
+  output_directory: resources/calc_emissions/Montenegro
   demand_scenarios:
     reference:
       description: Montenegro reference demand (TWh).
@@ -29,26 +25,26 @@ calc_emissions:
       description: Balanced mix with gradual decarbonisation.
       shares:
         coal: 0.25
-        gas: 0.30
+        gas: 0.3
         nuclear: 0.12
-        hydro: 0.10
-        wind: 0.10
+        hydro: 0.1
+        wind: 0.1
         solar: 0.08
         biomass: 0.05
     renewables_push:
       description: Accelerated deployment of wind and solar.
       shares:
-        coal: 0.10
+        coal: 0.1
         gas: 0.18
         nuclear: 0.12
         hydro: 0.12
         wind: 0.22
-        solar: 0.20
+        solar: 0.2
         biomass: 0.06
     fossil_lockin:
       description: Slower transition away from fossil generation.
       shares:
-        coal: 0.40
+        coal: 0.4
         gas: 0.35
         nuclear: 0.07
         hydro: 0.08
@@ -59,27 +55,28 @@ calc_emissions:
     demand_scenario: reference
     mix_scenario: reference
   scenarios:
-    - name: scenario_1_lower_bound
-      demand_scenario: lower_bound
-      mix_scenario: reference
-    - name: scenario_1_upper_bound
-      demand_scenario: upper_bound
-      mix_scenario: reference
-    - name: custom_example
-      demand_custom:
-        2025: 5
-        2030: 6
-        2040: 7.5
-        2050: 9
-        2060: 10.5
-        2070: 11.5
-        2080: 12
-        2090: 12.5
-        2100: 13
-      mix_custom:
-        shares:
-          coal: 0.08
-          gas: 0.12
-          hydro: 0.55
-          wind: 0.13
-          solar: 0.10
+  - name: scenario_1_lower_bound
+    demand_scenario: lower_bound
+    mix_scenario: reference
+  - name: scenario_1_upper_bound
+    demand_scenario: upper_bound
+    mix_scenario: reference
+  - name: custom_example
+    demand_custom:
+      2025: 5
+      2030: 6
+      2040: 7.5
+      2050: 9
+      2060: 10.5
+      2070: 11.5
+      2080: 12
+      2090: 12.5
+      2100: 13
+    mix_custom:
+      shares:
+        coal: 0.08
+        gas: 0.12
+        hydro: 0.55
+        wind: 0.13
+        solar: 0.1
+  results_directory: results/emissions/Montenegro

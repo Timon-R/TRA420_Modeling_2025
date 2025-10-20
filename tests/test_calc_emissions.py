@@ -19,6 +19,11 @@ def test_generate_years_produces_expected_sequence():
     assert years == [2020, 2025, 2030]
 
 
+def test_generate_years_uses_fallback_when_missing_config():
+    years = _generate_years(None, {"start": 2030, "end": 2040, "step": 5})
+    assert years == [2030, 2035, 2040]
+
+
 def test_values_to_series_interpolates_and_aligns_years():
     series = _values_to_series({2020: 100, 2030: 200}, [2020, 2025, 2030], "demand")
     assert series.loc[2025] == pytest.approx(150.0)
@@ -31,10 +36,10 @@ def test_calculate_emissions_combines_demand_and_mix():
     mix = pd.DataFrame({"coal": [0.6, 0.5], "solar": [0.4, 0.5]}, index=years)
     factors = pd.DataFrame(
         {
-            "co2_mt_per_twh": [0.9, 0.0],
-            "so2_kt_per_twh": [5.0, 0.0],
-            "nox_kt_per_twh": [2.0, 0.0],
-            "pm25_kt_per_twh": [1.0, 0.0],
+            "co2": [0.9, 0.0],
+            "sox": [0.005, 0.0],
+            "nox": [0.002, 0.0],
+            "pm25": [0.001, 0.0],
         },
         index=["coal", "solar"],
     )
@@ -44,7 +49,7 @@ def test_calculate_emissions_combines_demand_and_mix():
     assert isinstance(result, EmissionScenarioResult)
     np.testing.assert_allclose(result.generation_twh.loc[2020, "coal"], 60.0)
     np.testing.assert_allclose(result.total_emissions_mt["co2"].iloc[0], 54.0)
-    np.testing.assert_allclose(result.total_emissions_mt["so2"].iloc[0], 0.3)
+    np.testing.assert_allclose(result.total_emissions_mt["sox"].iloc[0], 0.3)
 
 
 def test_run_from_config_creates_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -56,9 +61,9 @@ def test_run_from_config_creates_outputs(tmp_path: Path, monkeypatch: pytest.Mon
         {
             "technology": ["coal", "solar"],
             "co2_mt_per_twh": [1.0, 0.0],
-            "so2_kt_per_twh": [2.0, 0.0],
-            "nox_kt_per_twh": [1.0, 0.0],
-            "pm25_kt_per_twh": [0.5, 0.0],
+            "sox_kg_per_kwh": [0.002, 0.0],
+            "nox_kg_per_kwh": [0.001, 0.0],
+            "pm25_kg_per_kwh": [0.0005, 0.0],
         }
     )
     factors_path = root / "factors.csv"
@@ -69,7 +74,6 @@ def test_run_from_config_creates_outputs(tmp_path: Path, monkeypatch: pytest.Mon
             "emission_factors_file": str(factors_path),
             "output_directory": str(root / "resources"),
             "results_directory": str(root / "results"),
-            "years": {"start": 2020, "end": 2025, "step": 5},
             "demand_scenarios": {},
             "mix_scenarios": {},
             "baseline": {
@@ -90,7 +94,10 @@ def test_run_from_config_creates_outputs(tmp_path: Path, monkeypatch: pytest.Mon
     config_path.write_text(json.dumps(config))
 
     # run_from_config expects YAML; using json-compatible structure is valid for yaml.safe_load.
-    results = run_from_config(config_path)
+    results = run_from_config(
+        config_path,
+        default_years={"start": 2020, "end": 2025, "step": 5},
+    )
 
     assert {"baseline", "policy"} <= set(results.keys())
     output_file = root / "resources" / "policy" / "co2.csv"

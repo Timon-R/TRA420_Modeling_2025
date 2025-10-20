@@ -4,3 +4,4 @@ resources/**
 !resources/temperature_policy_dummy.csv
 results/
 __pycache__/
+.DS_Store
