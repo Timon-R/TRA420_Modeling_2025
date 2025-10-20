@@ -1,0 +1,3 @@
+accumulated climate damages timeseries 
+
+config for output folder in results to run different scenarios and be able to compare (resources can be overwritten)
