@@ -8,7 +8,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -28,6 +28,7 @@ class SummarySettings:
     aggregation_horizon: tuple[int, int] | None = None
     plot_start: int = 2025
     plot_end: int = 2100
+    climate_labels: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -93,6 +94,14 @@ def _parse_climate_labels(value: object) -> list[str]:
                 labels.append(label)
         return labels
     return []
+
+
+def _split_climate_suffix(name: str, climate_labels: Sequence[str]) -> tuple[str, str | None]:
+    for label in sorted({cl.strip() for cl in climate_labels if cl}, key=len, reverse=True):
+        suffix = f"_{label}"
+        if name.endswith(suffix):
+            return name[: -len(suffix)], label
+    return name, None
 
 
 def _resolve_directory(path: Path, label: str) -> Path:
@@ -355,16 +364,7 @@ def build_summary(
         if start is not None and end is not None:
             aggregation_horizon = (int(start), int(end))
 
-    settings = SummarySettings(
-        years=years,
-        output_directory=output_directory,
-        include_plots=include_plots,
-        plot_format=plot_format,
-        aggregation_mode=aggregation_mode,
-        aggregation_horizon=aggregation_horizon,
-        plot_start=plot_start,
-        plot_end=plot_end,
-    )
+    # settings will be created after climate label resolution
 
     methods = _resolve_methods(economic_cfg.get("methods", {}))
 
@@ -422,6 +422,8 @@ def build_summary(
                     derived.append(suffix)
         climate_labels = sorted(set(derived)) or [None]
 
+    climate_labels_str = [cl for cl in climate_labels if cl is not None]
+
     scc_summary_table = _load_scc_summary_table(scc_output_dir / "scc_summary.csv")
 
     metrics_map: dict[str, ScenarioMetrics] = {}
@@ -456,7 +458,7 @@ def build_summary(
                 _safe_name(scenario_label), {}
             )
             scc_average = dict(average_lookup)
-            if settings.aggregation_mode != "average":
+            if aggregation_mode != "average":
                 scc_average = {}
 
             metrics_map[scenario_label] = ScenarioMetrics(
@@ -472,6 +474,19 @@ def build_summary(
                 emission_timeseries=emission_series_dict,
                 temperature_timeseries=temperature_series,
             )
+
+    # Construct summary settings after climate label resolution
+    settings = SummarySettings(
+        years=years,
+        output_directory=output_directory,
+        include_plots=include_plots,
+        plot_format=plot_format,
+        aggregation_mode=aggregation_mode,
+        aggregation_horizon=aggregation_horizon,
+        plot_start=plot_start,
+        plot_end=plot_end,
+        climate_labels=climate_labels_str,
+    )
 
     if not metrics_map:
         LOGGER.warning(
@@ -734,6 +749,15 @@ def write_plots(
 
     # Emission delta (Mt CO2)
     emission_data = _pivot_metric(metrics_map, "emission_delta_mt")
+    # Collapse by base scenario (strip climate suffix), since emissions are
+    # identical across SSPs for a given policy scenario.
+    if settings.climate_labels:
+        collapsed: dict[str, Mapping[int, float]] = {}
+        for scenario in sorted(emission_data.keys()):
+            base, _ = _split_climate_suffix(scenario, settings.climate_labels)
+            if base not in collapsed:
+                collapsed[base] = emission_data[scenario]
+        emission_data = collapsed
     _plot_grouped_bars(
         emission_data,
         years,
@@ -758,6 +782,13 @@ def write_plots(
 
     # Mortality delta (deaths/year)
     mortality_data = _pivot_metric(metrics_map, "mortality_delta")
+    if settings.climate_labels:
+        collapsed_mortality: dict[str, Mapping[int, float]] = {}
+        for scenario in sorted(mortality_data.keys()):
+            base, _ = _split_climate_suffix(scenario, settings.climate_labels)
+            if base not in collapsed_mortality:
+                collapsed_mortality[base] = mortality_data[scenario]
+        mortality_data = collapsed_mortality
     _plot_grouped_bars(
         mortality_data,
         years,
@@ -775,6 +806,13 @@ def write_plots(
         }
         for scenario, values in _pivot_metric(metrics_map, "mortality_percent").items()
     }
+    if settings.climate_labels:
+        collapsed_percent: dict[str, Mapping[int, float]] = {}
+        for scenario in sorted(mortality_percent_data.keys()):
+            base, _ = _split_climate_suffix(scenario, settings.climate_labels)
+            if base not in collapsed_percent:
+                collapsed_percent[base] = mortality_percent_data[scenario]
+        mortality_percent_data = collapsed_percent
     _plot_grouped_bars(
         mortality_percent_data,
         years,
@@ -816,8 +854,17 @@ def write_plots(
         )
 
     emission_ts = {
-        scenario: metrics.emission_timeseries or {} for scenario, metrics in metrics_map.items()
+        scenario: metrics.emission_timeseries or {}
+        for scenario, metrics in metrics_map.items()
+        if metrics.emission_timeseries is not None
     }
+    if settings.climate_labels:
+        collapsed_ts: dict[str, Mapping[int, float]] = {}
+        for scenario, series in emission_ts.items():
+            base, _ = _split_climate_suffix(scenario, settings.climate_labels)
+            if base not in collapsed_ts:
+                collapsed_ts[base] = series
+        emission_ts = collapsed_ts
     _plot_emission_timeseries(
         emission_ts,
         output_path=output_dir,
