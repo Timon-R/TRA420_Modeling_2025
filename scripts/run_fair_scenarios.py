@@ -118,6 +118,11 @@ ADJUSTMENT_CSV = PARAMETERS.get("adjustment_timeseries_csv")
 SUMMARY_CANDIDATES = {2030, 2050, 2100, int(round(CLIMATE_END))}
 SUMMARY_YEARS = sorted(year for year in SUMMARY_CANDIDATES if GLOBAL_START <= year <= CLIMATE_END)
 
+# Emission label used as the reference/baseline in downstream modules. We keep
+# the baseline CSVs in resources/ (consumed by SCC), but avoid duplicating them
+# in results/climate since each scenario CSV already contains a baseline column.
+REFERENCE_EMISSION_LABEL = str(ECONOMIC_CFG.get("reference_scenario", "baseline"))
+
 
 def _derive_sample_years(option: str) -> list[int]:
     option = option.lower()
@@ -279,7 +284,11 @@ def _write_csv(label: str, climate_scenario: str, result) -> None:
             "climate_scenario": climate_scenario,
         }
     )
-    df.to_csv(OUTPUT_DIR / f"{label}.csv", index=False)
+    # Avoid writing redundant baseline CSVs to results/climate; the baseline
+    # temperature path is already included as a column in every scenario file.
+    # Still mirror the full CSV to resources/climate for downstream consumers.
+    if not label.startswith(f"{REFERENCE_EMISSION_LABEL}_"):
+        df.to_csv(OUTPUT_DIR / f"{label}.csv", index=False)
     df.to_csv(RESOURCE_DIR / f"{label}.csv", index=False)
 
 
