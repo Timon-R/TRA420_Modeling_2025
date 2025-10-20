@@ -91,7 +91,9 @@ Under `climate_module`:
   choose matching GDP and population data.
 
 These are mirrored under `resources/climate` for downstream use (e.g., the
-economic module).
+economic module). To avoid duplication, baseline-only files are no longer
+written to `results/climate` — each scenario CSV already includes the baseline
+temperature column.
 
 ## Usage
 

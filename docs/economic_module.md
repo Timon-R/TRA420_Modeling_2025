@@ -88,6 +88,20 @@ factors, and discounted damages in the result details.
   by the annual emission deltas).
 - `details`: richer diagnostics (e.g., consumption metrics for Ramsey).
 
+### SCC Formulas (conceptual)
+
+Let `ΔD_t` be the damage difference (scenario − reference) in year `t` and `ΔE_t`
+the emission delta in t CO₂ for year `t`. Let `DF_t` be the discount factor for `t`.
+
+- Per‑year SCC series (`aggregation: per_year`):
+  - Incremental damage change: `ΔΔD_t = ΔD_t − ΔD_{t−1}` (with `ΔΔD_{t0} = ΔD_{t0}`)
+  - SCC(t) = `DF_t × ΔΔD_t / ΔE_t`
+
+- Aggregated SCC (`aggregation: average`):
+  - Numerator: `Σ_t DF_t × ΔD_t`
+  - Denominator: `Σ_t ΔE_t`
+  - SCC = Numerator / Denominator
+
 ## Usage
 
 CLI wrapper `scripts/run_scc.py` orchestrates:

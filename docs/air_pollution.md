@@ -25,6 +25,26 @@ changes and applying concentration–response functions.
    per-pollutant mortality summaries, and an aggregate summary of the combined
    mortality change for all pollutants with provided baselines.
 
+This module is intentionally lightweight and deterministic: all effects are a
+transparent scaling of published concentration statistics by emission ratios,
+followed by a standard log‑linear health response. It is designed to be easy to
+audit, reproduce, and sensitivity‑test.
+
+## Data Requirements
+
+Provide one CSV per pollutant with country concentration statistics:
+
+- Required columns: `country` and at least one of `mean`, `median`, `min`, `max`.
+- Units: concentrations in µg/m³.
+- Example (wide format):
+
+  country,median,mean
+  Albania,20.4,22.1
+  Serbia,25.0,25.9
+
+If both `median` and `mean` exist, the preferred statistic is selected from the
+configuration and missing preferences fall back by the configured order.
+
 ## Key Equations
 
 - **Emission ratio**  
@@ -72,6 +92,14 @@ changes and applying concentration–response functions.
     \Delta m^{\text{total}}_t
   \\]
 
+## Units and Conventions
+
+- Emissions from `calc_emissions` are in megatonnes (Mt) per year. Only ratios
+  are used here, so absolute unit scaling cancels out.
+- Concentrations are in µg/m³. The RR slope `β` is in (per µg/m³) units.
+- Mortality percentage changes are unitless; mortality deltas (deaths/year)
+  adopt the baseline deaths’ units and cadence.
+
 ## Configuration (`config.yaml`)
 
 ```yaml
@@ -118,7 +146,28 @@ air_pollution:
   Per-pollutant baselines drive per-pollutant mortality summaries, whereas the
   module-level baseline drives the combined `total_mortality_summary.csv`.
 - If both `per_year` and `total` are absent a `ValueError` is raised.
-  For totals, specify either `span` (`start`/`end`) or an explicit `years` list.
+- For totals, specify either `span` (`start`/`end`) or an explicit `years` list;
+  the module converts totals to an average `per_year` by dividing across the
+  number of years in the period.
+- `scenarios`: accepts `all`, a single name, or a list; the baseline scenario is
+  always required in the emissions results but is not processed as an output.
+
+### Country and Scenario Selection
+
+- Country set defaults to all countries present in the stats file; restrict via
+  `air_pollution.countries: ["Serbia", "Albania"]`.
+- Scenario selection is controlled by `air_pollution.scenarios`. The module
+  processes every non‑baseline scenario produced by `calc_emissions` unless a
+  subset is specified.
+
+### Weights
+
+- Country weights: module‑level `country_weights` apply to all pollutants unless
+  overridden per pollutant. Use `equal` for uniform weighting or a mapping of
+  country → weight; values are normalised automatically each year.
+- Combined pollutant weights: `baseline_deaths.weights` defines how per‑pollutant
+  percentage changes are blended when computing the total summary (defaults to
+  equal weighting across available pollutants).
 
 ## Usage
 
@@ -135,6 +184,21 @@ The CLI:
 2. Invokes `air_pollution.run_from_config()` with the shared `config.yaml`.
 3. Prints weighted percentage changes and (if configured) mortality deltas.
 4. Writes CSV outputs to `results/air_pollution/<scenario>/`.
+
+Example invocation with a focused scenario set and custom weights:
+
+```yaml
+air_pollution:
+  scenarios: [scenario_1_lower_bound, scenario_1_upper_bound]
+  country_weights:
+    Serbia: 2
+    Albania: 1
+  pollutants:
+    pm25:
+      stats_file: data/air_pollution/PM25_country_stats.csv
+      relative_risk: 1.08
+      reference_delta: 10
+```
 
 You can also import `run_from_config` from notebooks or other modules to obtain
 the structured `AirPollutionResult` objects for further analysis.
@@ -164,6 +228,17 @@ For each scenario and pollutant:
   baseline is provided; columns mirror the per-pollutant summary and reflect
   pollutant weights specified in `baseline_deaths.weights`.
 
+File layout per scenario:
+
+```
+results/air_pollution/<scenario>/
+  pm25_health_impact.csv
+  pm25_mortality_summary.csv        # if per-pollutant baseline provided
+  nox_health_impact.csv
+  nox_mortality_summary.csv         # if per-pollutant baseline provided
+  total_mortality_summary.csv       # if module-level baseline provided
+```
+
 The `AirPollutionResult` object also exposes:
 
 - `pollutant_results`: mapping of pollutant → `PollutantImpact`
@@ -184,3 +259,13 @@ The `AirPollutionResult` object also exposes:
 - Add unit tests when introducing new pollutants or weighting strategies to
   verify that percent-change aggregation and mortality calculations behave as
   expected (see `tests/test_air_pollution.py` for examples).
+
+### Edge Cases and Diagnostics
+
+- If baseline emissions are zero while scenario emissions are non‑zero (or vice
+  versa), the emission ratio is undefined; the module skips those entries.
+- If both baseline and scenario emissions are zero for a year/pollutant, the
+  ratio is treated as 1.0 (no change), yielding a zero mortality delta.
+- Outputs are monotone in the emission ratio under the log‑linear model; sanity
+  check sign and magnitude by inspecting `*_health_impact.csv` and the aggregate
+  summaries.

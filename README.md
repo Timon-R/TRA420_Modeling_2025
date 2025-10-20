@@ -25,6 +25,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
 - `pyproject.toml` — project metadata plus Ruff lint/format configuration.
 - `.gitignore` — excludes generated results and other artifacts.
 - `README.md` — usage guidance and development conventions.
+ - `docs/` — module documentation and CLI guides (`economic_module.md`, `climate_module.md`, `pattern_scaling.md`, `air_pollution.md`, `results_summary.md`, `scripts.md`).
 
 ## Getting Started
 
@@ -92,6 +93,7 @@ Typical workflow (driven by `config.yaml`):
 3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column.
 4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
 5. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
+6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles key indicators and plots. Emission and mortality plots collapse SSP suffixes (identical across climate pathways), while SCC and temperature remain pathway‑specific.
 
 ## Testing
 
@@ -208,5 +210,5 @@ All runtime settings live in `config.yaml`.
   - `data_sources.emission_root` and `data_sources.temperature_root` should target the intermediate `resources/` products (`resources/All_countries/<scenario>/co2.csv` and `resources/climate/<scenario>_<climate>.csv`). `data_sources.climate_scenario` selects which climate pathway to pair with each emission scenario when the SCC module is run without explicit file listings.
   - When `aggregation` is set to `average`, provide `aggregation_horizon` (`start`, `end`) to bound the averaging window. The CLI enforces this so you always know which portion of the timeline feeds the aggregate SCC.
 - `results`
-  - `summary` collects cross-module indicators (SCC, damages, temperature and emission deltas, mortality impacts) for configured years and writes `summary.txt` plus optional comparison bar charts to `output_directory`.
+  - `summary` collects cross-module indicators (SCC, damages, temperature and emission deltas, mortality impacts) for configured years and writes `summary.txt` plus optional comparison bar charts to `output_directory`. See `docs/results_summary.md`.
   - Toggle `include_plots` to disable chart generation (useful on headless systems) or change `plot_format` for publication-ready graphics.
