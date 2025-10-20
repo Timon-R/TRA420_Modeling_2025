@@ -1,3 +1,3 @@
-accumulated climate damages timeseries 
+accumulated climate damages timeseries (in NPV)
 
 config for output folder in results to run different scenarios and be able to compare (resources can be overwritten)
