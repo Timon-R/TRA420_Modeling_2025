@@ -89,7 +89,7 @@ economic_module:
   gdp_series: null  # Optional override CSV with columns: year, gdp_trillion_usd [, population_million].
   gdp_population_directory: data/GDP_and_Population_data  # Prefers long CSVs (SSP_gdp_long_2020ppp.csv, SSP_population_long.csv); falls back to Excel.
   run:
-    method: pulse          # 'kernel' (fast IRF approximation) or 'pulse' (FaIR pulse runs)
+    method: pulse          # 'kernel' (fast IRF approximation;TODO get timeseries plot for this as well) or 'pulse' (FaIR pulse runs)
     kernel:
       horizon: null           # Optional integer L; null uses full length
       regularization_alpha: 1.0e-6  # Ridge α for kernel inversion
