@@ -108,22 +108,34 @@ relationship to report per-emission-year damages for each discounting method.
 ### Pulse Method (definition-faithful)
 
 Set `economic_module.run.method: pulse` when you want the textbook SCC(τ).
-For each emissions year τ the pipeline:
+The workflow uses the FaIR configuration identified by the `climate_scenario`
+metadata that already backs the temperature inputs—no extra “baseline-only”
+FaIR run is issued. Instead, for each emissions year τ the pipeline prepares a
+box pulse (a +`pulse_size_tco2` top-hat that lasts exactly one calendar year)
+on top of that same baseline scenario and evaluates FaIR once:
 
-1. Adds a one-year CO₂ pulse (default 1 Mt) to the FaIR reference pathway.
-2. Reruns FaIR and records the incremental temperature response `ΔT_{t|τ}`.
-3. Applies the configured damage function to obtain `ΔD_{t|τ}`.
-4. Discounts the damages with the selected rule (constant or Ramsey), evaluates the PV at the
-   emissions year τ, and divides by the pulse size. (SCC(τ) is therefore reported in τ-year units;
-   multiply by the discount factor β_τ to express it in the base-year currency.)
+1. Build the pulse by taking the difference of two `step_change` adjustments,
+   so emissions jump up at τ and drop back down at τ+1.
+2. Call FaIR for the adjusted pathway. FaIR internally runs the baseline and
+   adjusted configurations together, so this single call yields both the
+   unperturbed trajectory and the pulse-perturbed one. There is exactly **one**
+   FaIR evaluation per pulse year.
+3. Record the incremental temperature response `ΔT_{t|τ}` from the FaIR result.
+4. Apply the configured damage function to obtain `ΔD_{t|τ}`.
+5. Discount the damages with the selected rule (constant or Ramsey), evaluate
+   the PV at the emissions year τ, and divide by the pulse size. SCC(τ) is
+   therefore reported in τ-year units; multiply by the discount factor β_τ to
+   express it in the base-year currency.
 
 Regardless of how coarsely emissions were reported originally, the pulse workflow
 evaluates every calendar year in the overlapping data window; the CSV loader
 interpolates intermediate years so SCC(τ) values remain invariant to the reporting
 step.
 
-This captures full state dependence and non-linear damages at the cost of one FaIR run
-per pulse year. Pulse size is controlled by `run.pulse.pulse_size_tco2`.
+This captures full state dependence and non-linear damages at the cost of one FaIR call
+per pulse year (each call bundles the baseline+pulse pair). Pulse size is controlled by
+`run.pulse.pulse_size_tco2`. Results are cached across runs with identical pulse settings
+so repeat evaluations avoid re-running FaIR.
 
 **Pros**
 - Exact by definition (discounted marginal damages for the emission year).
