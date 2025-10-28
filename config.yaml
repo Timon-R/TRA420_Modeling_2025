@@ -142,6 +142,7 @@ economic_module:
       eta: 1.5
 
 results:
+  run_directory: null  # Optional subfolder: set to e.g. 'run_A' to nest results/* under results/run_A/.
   summary:
     years:  # Key reporting years for summary outputs (includes SCC, damages, emissions, temperature, mortality).
       - 2030

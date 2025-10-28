@@ -25,6 +25,7 @@ import pandas as pd
 import yaml
 
 from calc_emissions.calculator import EmissionScenarioResult, run_from_config as run_emissions
+from config_paths import apply_results_run_directory, get_results_run_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,9 +92,15 @@ def run_from_config(
     if not module_cfg:
         raise ValueError("'air_pollution' section missing from config.yaml")
 
+    run_directory = get_results_run_directory(full_config)
     output_dir = Path(module_cfg.get("output_directory", "results/air_pollution"))
     if not output_dir.is_absolute():
         output_dir = (config_path.parent / output_dir).resolve()
+    output_dir = apply_results_run_directory(
+        output_dir,
+        run_directory,
+        repo_root=config_path.parent.resolve(),
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fallback_measures = _normalise_measures(
@@ -110,7 +117,10 @@ def run_from_config(
     )
 
     if emission_results is None:
-        emission_results = run_emissions(config_path=config_path)
+        emission_results = run_emissions(
+            config_path=config_path,
+            results_run_directory=run_directory,
+        )
     if "baseline" not in emission_results:
         raise ValueError("calc_emissions results must include a 'baseline' entry.")
 

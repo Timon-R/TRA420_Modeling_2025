@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from calc_emissions import EmissionScenarioResult, run_from_config  # noqa: E402
+from config_paths import apply_results_run_directory, get_results_run_directory  # noqa: E402
 
 LOGGER = logging.getLogger("calc_emissions.aggregate")
 
@@ -38,13 +39,23 @@ POLLUTANTS = ["co2", "sox", "nox", "pm25", "gwp100"]
 
 
 def _load_country_settings() -> (
-    tuple[Path, str, Path, Path | None, Path, list[str], dict[str, int] | None]
+    tuple[
+        Path,
+        str,
+        Path,
+        Path | None,
+        Path,
+        list[str],
+        dict[str, int] | None,
+        str | None,
+    ]
 ):
     config_path = ROOT / "config.yaml"
     config = {}
     if config_path.exists():
         with config_path.open() as handle:
             config = yaml.safe_load(handle) or {}
+    run_directory = get_results_run_directory(config)
     module_cfg = config.get("calc_emissions", {})
     countries_cfg = module_cfg.get("countries", {})
     directory = ROOT / countries_cfg.get("directory", "data/calc_emissions/countries")
@@ -53,7 +64,14 @@ def _load_country_settings() -> (
         "aggregate_output_directory", "resources/All_countries"
     )
     aggregate_results = countries_cfg.get("aggregate_results_directory")
-    results_path = None if aggregate_results is None else ROOT / aggregate_results
+    results_path = None
+    if aggregate_results is not None:
+        results_candidate = ROOT / aggregate_results
+        results_path = apply_results_run_directory(
+            results_candidate,
+            run_directory,
+            repo_root=ROOT,
+        )
     resources_root = ROOT / countries_cfg.get("resources_root", "resources")
     scenarios = countries_cfg.get("scenarios", [])
     global_horizon = config.get("time_horizon")
@@ -65,6 +83,7 @@ def _load_country_settings() -> (
         resources_root,
         scenarios,
         global_horizon,
+        run_directory,
     )
 
 
@@ -216,6 +235,7 @@ def run_all_countries(
         resources_root,
         configured_scenarios,
         global_horizon,
+        run_directory,
     ) = _load_country_settings()
 
     countries_filter = [c.replace(" ", "_") for c in countries] if countries else None
@@ -232,7 +252,11 @@ def run_all_countries(
     LOGGER.info("Running calc_emissions for %d countries", len(configs))
     for country, cfg_path in configs.items():
         LOGGER.info("  • %s", country)
-        results = run_from_config(cfg_path, default_years=global_horizon)
+        results = run_from_config(
+            cfg_path,
+            default_years=global_horizon,
+            results_run_directory=run_directory,
+        )
 
         filtered_results = {"baseline": results["baseline"]}
         available_scenarios = set(results.keys()) - {"baseline"}
@@ -289,13 +313,14 @@ def run_all_countries(
 
 def _parse_args() -> argparse.Namespace:
     (
-        directory,
-        pattern,
+        _directory,
+        _pattern,
         default_output,
         default_results,
-        _,
+        _resources_root,
         configured_scenarios,
-        _,
+        _global_horizon,
+        _run_directory,
     ) = _load_country_settings()
     parser = argparse.ArgumentParser(
         description="Run emissions for all countries and aggregate deltas."

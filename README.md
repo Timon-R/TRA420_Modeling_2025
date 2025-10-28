@@ -201,6 +201,10 @@ All runtime settings live in `config.yaml`.
     - `scenarios`: `all` or a list of emission scenario names to evaluate.
   - Outputs include one `*_health_impact.csv` per pollutant plus optional `*_mortality_summary.csv` (if baseline deaths are configured) and a combined `total_mortality_summary.csv` aggregating all pollutants.
 
+- `results`
+  - `run_directory`: optional subfolder inserted under `results/` (for example `run_A`). When set, each module automatically writes to `results/<run_directory>/<module>/…` so you can compare runs without overwriting shared resources.
+  - `summary`: configuration for the cross-module report (see `docs/results_summary.md` for details on available fields).
+
 - `economic_module`
   - Computes SCC by combining temperature, emission, and GDP series.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.

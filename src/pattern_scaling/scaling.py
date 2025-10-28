@@ -8,6 +8,8 @@ from typing import Any, Dict
 import pandas as pd
 import yaml
 
+from config_paths import apply_results_run_directory, get_results_run_directory
+
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = DEFAULT_ROOT / "config.yaml"
 
@@ -96,14 +98,17 @@ def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None
 
     ps_cfg = _config_value(config, "pattern_scaling")
     cm_cfg = _config_value(config, "climate_module")
+    run_directory = get_results_run_directory(config)
 
     climate_dir = _resolve_path(cm_cfg.get("output_directory", "results/climate"))
+    climate_dir = apply_results_run_directory(climate_dir, run_directory, repo_root=DEFAULT_ROOT)
     if not climate_dir.exists():
         raise FileNotFoundError(
             f"Climate output directory '{climate_dir}' not found. Run the climate module first."
         )
 
     output_dir = _resolve_path(ps_cfg.get("output_directory", "results/climate_scaled"))
+    output_dir = apply_results_run_directory(output_dir, run_directory, repo_root=DEFAULT_ROOT)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     definitions = _config_value(cm_cfg, "climate_scenarios", "definitions")

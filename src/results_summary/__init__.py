@@ -13,6 +13,8 @@ from typing import Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from config_paths import apply_results_run_directory, get_results_run_directory
+
 LOGGER = logging.getLogger("results.summary")
 
 AVAILABLE_METHODS: tuple[str, ...] = ("constant_discount", "ramsey_discount")
@@ -116,7 +118,11 @@ def _resolve_directory(path: Path, label: str) -> Path:
     return candidate
 
 
-def _default_emission_root(root_cfg: Mapping[str, object], root: Path) -> Path | None:
+def _default_emission_root(
+    root_cfg: Mapping[str, object],
+    root: Path,
+    run_directory: str | None,
+) -> Path | None:
     countries_cfg = root_cfg.get("calc_emissions", {}).get("countries", {})
     path_str = countries_cfg.get("aggregate_output_directory") or countries_cfg.get(
         "aggregate_results_directory"
@@ -126,10 +132,14 @@ def _default_emission_root(root_cfg: Mapping[str, object], root: Path) -> Path |
     path = Path(path_str)
     if not path.is_absolute():
         path = (root / path).resolve()
-    return path
+    return apply_results_run_directory(path, run_directory, repo_root=root)
 
 
-def _default_temperature_root(root_cfg: Mapping[str, object], root: Path) -> Path | None:
+def _default_temperature_root(
+    root_cfg: Mapping[str, object],
+    root: Path,
+    run_directory: str | None,
+) -> Path | None:
     climate_cfg = root_cfg.get("climate_module", {})
     path_str = climate_cfg.get("resource_directory") or climate_cfg.get("output_directory")
     if not path_str:
@@ -137,16 +147,19 @@ def _default_temperature_root(root_cfg: Mapping[str, object], root: Path) -> Pat
     path = Path(path_str)
     if not path.is_absolute():
         path = (root / path).resolve()
-    return path
+    return apply_results_run_directory(path, run_directory, repo_root=root)
 
 
-def _resolve_path(root: Path, value: object | None) -> Path | None:
+def _resolve_path(
+    root: Path,
+    value: object | None,
+    run_directory: str | None,
+) -> Path | None:
     if value in (None, "", False):
         return None
     path = Path(str(value))
-    if not path.is_absolute():
-        path = (root / path).resolve()
-    return path
+    absolute = path if path.is_absolute() else (root / path).resolve()
+    return apply_results_run_directory(absolute, run_directory, repo_root=root)
 
 
 def _load_full_series(path: Path, value_column: str) -> dict[int, float]:
@@ -355,14 +368,20 @@ def build_summary(
         if isinstance(config.get("results"), Mapping)
         else {}
     )
+    run_directory = get_results_run_directory(config)
 
     years = _ensure_years(summary_cfg)
     if not years:
         raise ValueError("results.summary.years must contain at least one reporting year.")
 
-    output_directory = _resolve_path(root, summary_cfg.get("output_directory"))
+    output_directory = _resolve_path(root, summary_cfg.get("output_directory"), run_directory)
     if output_directory is None:
-        output_directory = (root / "results" / "summary").resolve()
+        default_summary_dir = (root / "results" / "summary").resolve()
+        output_directory = apply_results_run_directory(
+            default_summary_dir,
+            run_directory,
+            repo_root=root,
+        )
     include_plots = bool(summary_cfg.get("include_plots", True))
     plot_format = str(summary_cfg.get("plot_format", "png"))
     plot_start = int(summary_cfg.get("plot_start", 2025))
@@ -386,9 +405,9 @@ def build_summary(
     data_sources = economic_cfg.get("data_sources", {})
     if not isinstance(data_sources, Mapping):
         data_sources = {}
-    emission_root = _resolve_path(root, data_sources.get("emission_root"))
+    emission_root = _resolve_path(root, data_sources.get("emission_root"), run_directory)
     if emission_root is None:
-        emission_root = _default_emission_root(config, root)
+        emission_root = _default_emission_root(config, root, run_directory)
     if emission_root is None:
         raise ValueError("Unable to resolve emission data root directory.")
     try:
@@ -396,9 +415,9 @@ def build_summary(
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise ValueError(str(exc)) from exc
 
-    temperature_root = _resolve_path(root, data_sources.get("temperature_root"))
+    temperature_root = _resolve_path(root, data_sources.get("temperature_root"), run_directory)
     if temperature_root is None:
-        temperature_root = _default_temperature_root(config, root)
+        temperature_root = _default_temperature_root(config, root, run_directory)
     if temperature_root is None:
         raise ValueError("Unable to resolve temperature data directory.")
     try:
@@ -406,14 +425,24 @@ def build_summary(
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise ValueError(str(exc)) from exc
 
-    scc_output_dir = _resolve_path(root, economic_cfg.get("output_directory"))
+    scc_output_dir = _resolve_path(root, economic_cfg.get("output_directory"), run_directory)
     if scc_output_dir is None:
-        scc_output_dir = (root / "results" / "economic").resolve()
+        default_scc_dir = (root / "results" / "economic").resolve()
+        scc_output_dir = apply_results_run_directory(
+            default_scc_dir,
+            run_directory,
+            repo_root=root,
+        )
     air_pollution_cfg = config.get("air_pollution", {})
     air_cfg = air_pollution_cfg if isinstance(air_pollution_cfg, Mapping) else {}
-    air_output_dir = _resolve_path(root, air_cfg.get("output_directory"))
+    air_output_dir = _resolve_path(root, air_cfg.get("output_directory"), run_directory)
     if air_output_dir is None:
-        air_output_dir = (root / "results" / "air_pollution").resolve()
+        default_air_dir = (root / "results" / "air_pollution").resolve()
+        air_output_dir = apply_results_run_directory(
+            default_air_dir,
+            run_directory,
+            repo_root=root,
+        )
 
     emission_column = str(economic_cfg.get("emission_column", "delta"))
 
