@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from config_paths import apply_results_run_directory, get_results_run_directory
 from economic_module import EconomicInputs, SCCAggregation, compute_scc
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RUN_METHODS = ["kernel", "pulse"]
 AVAILABLE_DISCOUNT_METHODS = ["constant_discount", "ramsey_discount"]
 AVAILABLE_AGGREGATIONS: tuple[SCCAggregation, ...] = ("average", "per_year")
+
+RUN_DIRECTORY: str | None = None
 
 
 def _format_path(path: Path) -> Path:
@@ -65,11 +68,17 @@ def _safe_name(name: str) -> str:
     return cleaned.strip("_") or "scenario"
 
 
-def _resolve_path(path_like: str | Path) -> Path:
+def _resolve_path(path_like: str | Path, *, apply_run_directory: bool = True) -> Path:
     path = Path(path_like)
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
+    absolute = path if path.is_absolute() else (ROOT / path)
+    absolute = absolute.resolve()
+    if apply_run_directory:
+        absolute = apply_results_run_directory(
+            absolute,
+            RUN_DIRECTORY,
+            repo_root=ROOT,
+        )
+    return absolute
 
 
 def _load_config() -> dict:
@@ -625,6 +634,8 @@ def _select_targets(
 
 def main() -> None:
     root_cfg = _load_config()
+    global RUN_DIRECTORY
+    RUN_DIRECTORY = get_results_run_directory(root_cfg)
     config = root_cfg.get("economic_module", {})
 
     parser = _build_parser(config, root_cfg)

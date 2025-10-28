@@ -1,3 +1,6 @@
 accumulated climate damages timeseries (in NPV)
+improve documentation for kernel method in economic module
 
-config for output folder in results to run different scenarios and be able to compare (resources can be overwritten)
+Upper and lower bound as config intervall, use average
+
+Pattern scaling per region (Western Balkans)

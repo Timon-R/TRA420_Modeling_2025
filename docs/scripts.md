@@ -2,6 +2,10 @@
 
 This project includes small wrappers around the core modules to make end‑to‑end runs easy.
 
+> Paths listed below show defaults. When `results.run_directory` is set in `config.yaml`,
+> each script automatically writes to `results/<run_directory>/…` instead of the bare `results/`
+> tree so you can keep multiple experiments side by side.
+
 ## Emissions
 
 - `scripts/run_calc_emissions.py` — per‑country deltas to `resources/<Country>/<scenario>/`.

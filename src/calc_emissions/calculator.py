@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from config_paths import apply_results_run_directory
+
 LOGGER = logging.getLogger("calc_emissions")
 if not LOGGER.handlers:
     handler = logging.StreamHandler()
@@ -100,6 +102,7 @@ def run_from_config(
     config_path: Path | str = "config.yaml",
     *,
     default_years: Mapping[str, float | int] | None = None,
+    results_run_directory: str | None = None,
 ) -> dict[str, EmissionScenarioResult]:
     """Run emission calculations based on ``config.yaml`` and write delta CSVs."""
     config_path = Path(config_path)
@@ -146,7 +149,10 @@ def run_from_config(
     output_dir = Path(module_cfg.get("output_directory", "resources"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results_dir = Path(module_cfg.get("results_directory", "results/emissions"))
+    results_dir = apply_results_run_directory(
+        Path(module_cfg.get("results_directory", "results/emissions")),
+        results_run_directory,
+    )
     results_dir.mkdir(parents=True, exist_ok=True)
 
     results: dict[str, EmissionScenarioResult] = {"baseline": baseline}

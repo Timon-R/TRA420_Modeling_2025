@@ -21,11 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from calc_emissions import run_from_config  # noqa: E402
+from config_paths import get_results_run_directory  # noqa: E402
 
 LOGGER = logging.getLogger("calc_emissions.run")
 
 
-def _load_country_settings() -> tuple[Path, str, dict | None]:
+def _load_country_settings() -> tuple[Path, str, dict | None, str | None]:
     config_path = ROOT / "config.yaml"
     config = {}
     if config_path.exists():
@@ -35,7 +36,8 @@ def _load_country_settings() -> tuple[Path, str, dict | None]:
     countries_cfg = module_cfg.get("countries", {})
     directory = ROOT / countries_cfg.get("directory", "data/calc_emissions/countries")
     pattern = countries_cfg.get("pattern", "config_{name}.yaml")
-    return directory, pattern, config.get("time_horizon")
+    run_directory = get_results_run_directory(config)
+    return directory, pattern, config.get("time_horizon"), run_directory
 
 
 def _available_countries(directory: Path, pattern: str) -> str:
@@ -79,7 +81,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    directory, pattern, global_horizon = _load_country_settings()
+    directory, pattern, global_horizon, run_directory = _load_country_settings()
 
     if not args.config and not args.country:
         available = _available_countries(directory, pattern)
@@ -91,7 +93,11 @@ def main() -> None:
     config_path = _resolve_config_path(args, directory, pattern)
     LOGGER.info("Running calc_emissions for %s", config_path)
 
-    results = run_from_config(config_path, default_years=global_horizon)
+    results = run_from_config(
+        config_path,
+        default_years=global_horizon,
+        results_run_directory=run_directory,
+    )
     for name, result in results.items():
         if name == "baseline":
             continue

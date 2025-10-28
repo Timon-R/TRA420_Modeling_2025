@@ -22,6 +22,7 @@ To reduce duplication, plots that do not vary by climate pathway are de‑duplic
 
 ```yaml
 results:
+  run_directory: null        # Optional: set 'experiment_A' to write to results/experiment_A/…
   summary:
     years: [2030, 2050]     # Reported years in text/JSON/plots
     output_directory: results/summary
@@ -37,9 +38,13 @@ Run the generator after your pipeline steps have produced outputs:
 PYTHONPATH=src python scripts/generate_summary.py
 ```
 
+If you configure `results.run_directory`, every module (including the summary)
+will write to `results/<run_directory>/…`, keeping resources shared while
+avoiding overwrites between experiments.
+
 It discovers economic results in `results/economic/`, climate CSVs in
 `resources/climate/`, emissions in `resources/All_countries/<scenario>/`, and
-air‑pollution summaries in `results/air_pollution/<scenario>/`.
+air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted for the run directory when configured).
 
 ## Outputs
 

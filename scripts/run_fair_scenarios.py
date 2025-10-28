@@ -56,6 +56,7 @@ import pandas as pd
 import yaml
 
 from climate_module import DEFAULT_TIME_CONFIG, ScenarioSpec, run_scenarios, step_change
+from config_paths import apply_results_run_directory, get_results_run_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("climate.run")
@@ -73,6 +74,7 @@ ROOT_CONFIG = _load_config()
 CONFIG = ROOT_CONFIG.get("climate_module", {})
 GLOBAL_HORIZON = ROOT_CONFIG.get("time_horizon", {})
 ECONOMIC_CFG = ROOT_CONFIG.get("economic_module", {})
+RESULTS_RUN_DIRECTORY = get_results_run_directory(ROOT_CONFIG)
 
 PARAMETERS = CONFIG.get("parameters", {})
 
@@ -153,7 +155,9 @@ def _derive_sample_years(option: str) -> list[int]:
 
 SAMPLE_YEARS = _derive_sample_years(CONFIG.get("sample_years_option", "default"))
 
-OUTPUT_DIR = ROOT / CONFIG.get("output_directory", "results/climate")
+_OUTPUT_DIR_CFG = Path(CONFIG.get("output_directory", "results/climate"))
+_OUTPUT_DIR_ABS = _OUTPUT_DIR_CFG if _OUTPUT_DIR_CFG.is_absolute() else (ROOT / _OUTPUT_DIR_CFG)
+OUTPUT_DIR = apply_results_run_directory(_OUTPUT_DIR_ABS, RESULTS_RUN_DIRECTORY, repo_root=ROOT)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 RESOURCE_DIR = ROOT / CONFIG.get("resource_directory", "resources/climate")
