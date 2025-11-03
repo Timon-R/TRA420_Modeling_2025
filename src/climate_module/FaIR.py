@@ -402,6 +402,13 @@ def _apply_emission_adjustments(
                 "adjustments can only be applied to emissions-driven species."
             )
         delta_array = _to_delta_array(delta, timepoints)
+        logger = logging.getLogger("climate.run")
+        logger.debug(
+            "Applying adjustment for specie %s: delta length %d, timepoints length %d",
+            specie,
+            len(delta_array),
+            len(timepoints),
+        )
         selection = {
             "specie": specie,
             "scenario": scenario,
@@ -423,6 +430,12 @@ def _to_delta_array(delta: ArrayLike, timepoints: np.ndarray) -> np.ndarray:
 
     array = np.asarray(delta, dtype=float)
     if array.shape[0] != timepoints.shape[0]:
+        logger = logging.getLogger("climate.run")
+        logger.debug(
+            "Mismatch in adjustment length: delta=%d, timepoints=%d",
+            array.shape[0],
+            timepoints.shape[0],
+        )
         raise ValueError(
             f"Emission adjustments must have length {timepoints.shape[0]}; "
             f"received {array.shape[0]}."

@@ -29,11 +29,11 @@ calc_emissions:
     reference:
       description: Balanced mix with gradual decarbonisation.
       shares:
-        coal: 0.10
-        gas: 0.10
-        hydro: 0.60
-        wind: 0.10
-        solar: 0.10
+        coal: 0.0
+        gas: 0.0
+        hydro: 0.97
+        wind: 0.02
+        solar: 0.01
     renewables_push:
       description: Accelerated deployment of wind and solar.
       shares:

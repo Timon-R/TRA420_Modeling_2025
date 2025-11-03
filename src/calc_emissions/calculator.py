@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from config_paths import apply_results_run_directory
+
 LOGGER = logging.getLogger("calc_emissions")
 if not LOGGER.handlers:
     handler = logging.StreamHandler()
@@ -26,12 +28,60 @@ LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
 
-POLLUTANTS = {
-    "co2": {"column": "co2_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
-    "sox": {"column": "sox_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
-    "nox": {"column": "nox_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
-    "pm25": {"column": "pm25_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt"},
-    "gwp100": {"column": "gwp100_kg_per_kwh", "to_mt": 1e-9, "unit": "Mt CO2eq"},
+POLLUTANTS: dict[str, dict[str, object]] = {
+    "co2": {
+        "aliases": {
+            "co2_mt_per_twh": 1.0,
+            "co2_kt_per_twh": 1e-3,
+            "co2_gwh": 1e-3,  # legacy typo support
+            "co2_kg_per_mwh": 1.0,
+            "co2_kg_per_kwh": 1.0,
+            "co2_g_per_kwh": 1e-6,
+        },
+        "unit": "Mt",
+    },
+    "sox": {
+        "aliases": {
+            "sox_mt_per_twh": 1.0,
+            "sox_kt_per_twh": 1e-3,
+            "sox_kg_per_mwh": 1.0,
+            "sox_kg_per_kwh": 1.0,
+            "sox_g_per_kwh": 1e-6,
+            "so2_kt_per_twh": 1e-3,
+            "so2_kg_per_kwh": 1.0,
+        },
+        "unit": "Mt",
+    },
+    "nox": {
+        "aliases": {
+            "nox_mt_per_twh": 1.0,
+            "nox_kt_per_twh": 1e-3,
+            "nox_kg_per_mwh": 1.0,
+            "nox_kg_per_kwh": 1.0,
+            "nox_g_per_kwh": 1e-6,
+        },
+        "unit": "Mt",
+    },
+    "pm25": {
+        "aliases": {
+            "pm25_mt_per_twh": 1.0,
+            "pm25_kt_per_twh": 1e-3,
+            "pm25_kg_per_mwh": 1.0,
+            "pm25_kg_per_kwh": 1.0,
+            "pm25_g_per_kwh": 1e-6,
+        },
+        "unit": "Mt",
+    },
+    "gwp100": {
+        "aliases": {
+            "gwp100_mt_per_twh": 1.0,
+            "gwp100_kt_per_twh": 1e-3,
+            "gwp100_kg_per_mwh": 1.0,
+            "gwp100_kg_per_kwh": 1.0,
+            "gwp100_g_per_kwh": 1e-6,
+        },
+        "unit": "Mt CO2eq",
+    },
 }
 
 
@@ -48,7 +98,12 @@ class EmissionScenarioResult:
     delta_mtco2: pd.Series
 
 
-def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, EmissionScenarioResult]:
+def run_from_config(
+    config_path: Path | str = "config.yaml",
+    *,
+    default_years: Mapping[str, float | int] | None = None,
+    results_run_directory: str | None = None,
+) -> dict[str, EmissionScenarioResult]:
     """Run emission calculations based on ``config.yaml`` and write delta CSVs."""
     config_path = Path(config_path)
     with config_path.open() as handle:
@@ -58,7 +113,10 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
     if not module_cfg:
         raise ValueError("'calc_emissions' section missing from config.yaml")
 
-    years = _generate_years(module_cfg.get("years", {}))
+    fallback_years = default_years
+    if fallback_years is None:
+        fallback_years = _discover_global_horizon(config_path)
+    years = _generate_years(module_cfg.get("years"), fallback_years)
     emission_factors = _load_emission_factors(
         Path(module_cfg.get("emission_factors_file", "data/emission_factors.csv"))
     )
@@ -68,7 +126,10 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
 
     baseline_cfg = module_cfg.get("baseline", {})
     baseline_demand = _resolve_demand_series(
-        years, demand_scenarios, baseline_cfg.get("demand_scenario"), baseline_cfg.get("demand_custom")
+        years,
+        demand_scenarios,
+        baseline_cfg.get("demand_scenario"),
+        baseline_cfg.get("demand_custom"),
     )
     baseline_mix = _resolve_mix_shares(
         years,
@@ -88,7 +149,13 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
     output_dir = Path(module_cfg.get("output_directory", "resources"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results: dict[str, EmissionScenarioResult] = {}
+    results_dir = apply_results_run_directory(
+        Path(module_cfg.get("results_directory", "results/emissions")),
+        results_run_directory,
+    )
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    results: dict[str, EmissionScenarioResult] = {"baseline": baseline}
     for scenario_cfg in module_cfg.get("scenarios", []):
         name = scenario_cfg.get("name")
         if not name:
@@ -119,18 +186,22 @@ def run_from_config(config_path: Path | str = "config.yaml") -> dict[str, Emissi
         scenario_dir = output_dir / name
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
+        results_scenario_dir = results_dir / name
+        results_scenario_dir.mkdir(parents=True, exist_ok=True)
+
         for pollutant, totals in scenario_result.total_emissions_mt.items():
             baseline_totals = baseline.total_emissions_mt.get(pollutant)
-            if baseline_totals is None:
-                delta = totals.copy()
-            else:
-                delta = totals - baseline_totals
+            delta = totals.copy() if baseline_totals is None else totals - baseline_totals
 
             if pollutant == "co2":
                 scenario_result.delta_mtco2 = delta
 
+            df = pd.DataFrame({"year": delta.index.astype(int), "delta": delta.values})
             file_path = scenario_dir / f"{pollutant}.csv"
-            pd.DataFrame({"year": years, "delta": delta}).to_csv(file_path, index=False)
+            df.to_csv(file_path, index=False)
+
+            results_file_path = results_scenario_dir / f"{pollutant}.csv"
+            df.to_csv(results_file_path, index=False)
 
         results[name] = scenario_result
 
@@ -147,7 +218,6 @@ def calculate_emissions(
     if not isinstance(demand_series.index, pd.Index):
         raise TypeError("demand_series must be a pandas Series with year index")
 
-
     # Convert demand_series from TWh to kWh for calculation
     # 1 TWh = 1e9 kWh
     demand_kwh = demand_series * 1e9
@@ -156,18 +226,16 @@ def calculate_emissions(
     technology_emissions: dict[str, pd.DataFrame] = {}
     total_emissions: dict[str, pd.Series] = {}
 
-    for pollutant, meta in POLLUTANTS.items():
-        column = meta["column"]
-        if column not in emission_factors.columns:
+    for pollutant, _meta in POLLUTANTS.items():
+        if pollutant not in emission_factors.columns:
             continue
-        factors = emission_factors[column]
+        factors = emission_factors[pollutant]
         emissions = generation.mul(factors, axis=1)
-        emissions_mt = emissions * meta["to_mt"]
-        technology_emissions[pollutant] = emissions_mt
-        total_emissions[pollutant] = emissions_mt.sum(axis=1)
+        technology_emissions[pollutant] = emissions
+        total_emissions[pollutant] = emissions.sum(axis=1)
 
     if "co2" not in total_emissions:
-        raise ValueError("Emission factors must include a 'co2_mt_per_twh' column.")
+        raise ValueError("Emission factors must include CO₂ intensities.")
 
     co2_series = total_emissions["co2"]
 
@@ -178,14 +246,45 @@ def calculate_emissions(
         generation_twh=generation,
         technology_emissions_mt=technology_emissions,
         total_emissions_mt=total_emissions,
-        delta_mtco2=pd.Series(np.zeros_like(co2_series.values), index=co2_series.index, dtype=float),
+        delta_mtco2=pd.Series(
+            np.zeros_like(co2_series.values), index=co2_series.index, dtype=float
+        ),
     )
 
 
-def _generate_years(cfg: Mapping[str, float | int]) -> list[int]:
-    start = int(cfg.get("start", 2025))
-    end = int(cfg.get("end", 2100))
-    step = int(cfg.get("step", 5))
+def _discover_global_horizon(config_path: Path) -> Mapping[str, float | int] | None:
+    """Search parent directories for a root config containing ``time_horizon``."""
+
+    for parent in [config_path.parent, *config_path.parents]:
+        candidate = parent / "config.yaml"
+        if not candidate.exists():
+            continue
+        try:
+            with candidate.open() as handle:
+                config = yaml.safe_load(handle) or {}
+        except Exception:  # pragma: no cover - defensive against malformed configs
+            continue
+        horizon = config.get("time_horizon")
+        if isinstance(horizon, Mapping):
+            return horizon
+    return None
+
+
+def _generate_years(
+    cfg: Mapping[str, float | int] | None,
+    fallback: Mapping[str, float | int] | None = None,
+) -> list[int]:
+    values: dict[str, float | int] = {"start": 2025, "end": 2100, "step": 5}
+    for source in (fallback, cfg):
+        if not source:
+            continue
+        for key in ("start", "end", "step"):
+            if key in source:
+                values[key] = source[key]
+
+    start = int(values["start"])
+    end = int(values["end"])
+    step = int(values["step"])
     if start >= end:
         raise ValueError("'start' year must be less than 'end' year")
     if step <= 0:
@@ -201,14 +300,31 @@ def _load_emission_factors(path: Path) -> pd.DataFrame:
     if "technology" not in df.columns:
         raise ValueError("Emission factors CSV must contain a 'technology' column.")
     df["technology"] = df["technology"].str.strip().str.lower()
-    required_columns = [meta["column"] for meta in POLLUTANTS.values()]
-    missing = [col for col in required_columns if col not in df.columns]
-    if missing:
+    factors: dict[str, pd.Series] = {}
+    for pollutant, meta in POLLUTANTS.items():
+        aliases = meta["aliases"]
+        selected_series = None
+        conversion = None
+        for column, scale in aliases.items():
+            if column in df.columns:
+                selected_series = df.set_index("technology")[column].astype(float)
+                conversion = float(scale)
+                break
+        if selected_series is None:
+            continue
+        factors[pollutant] = selected_series * conversion
+
+    if "co2" not in factors:
+        available = ", ".join(df.columns)
         raise ValueError(
-            "Emission factors CSV is missing required columns: " + ", ".join(missing)
+            "Emission factors must provide a CO₂ intensity column. "
+            f"Supported aliases include: {list(POLLUTANTS['co2']['aliases'])}. "
+            f"Available columns: {available}"
         )
-    factors = df.set_index("technology")[required_columns].astype(float)
-    return factors
+
+    factor_df = pd.DataFrame(factors)
+    factor_df = factor_df.loc[df["technology"].tolist()]
+    return factor_df
 
 
 def _resolve_demand_series(

@@ -9,6 +9,9 @@ dependencies:
   - numpy>=1.26
   - pandas>=2.1
   - scipy>=1.11
+  - openpyxl>=3.1
+  # Testing
+  - pytest>=8.4
   # Visualization & UI (adjust when GUI tech is chosen)
   - matplotlib>=3.8
   - pip:

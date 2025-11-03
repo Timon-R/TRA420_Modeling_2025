@@ -12,7 +12,7 @@
   - Changed emission factor input units in emission factor tables to kg per kWh, so that they better match data from Ecoinvent. Adapted emission calculation code. Outputs are still in Mt of emissions.
   - Changed name of SO_2 emissions 'so2_kg_per_kWh' to 'sox_kg_kWh' to match emission factors in Ecoinvent.
 
-  ## 20251018
+## 2025-10-18
   # Commit 1
   - Added/updated per-country emission factor CSVs from `Emission_factors_all.xlsx`:
     - Wrote country files: `emission_factors_Albania.csv`, `emission_factors_Bosnia-Herzegowina.csv`, `emission_factors_Kosovo.csv`, `emission_factors_Montenegro.csv`, `emission_factors_North_Macedonia.csv`, `emission_factors_Serbia.csv`.
@@ -45,6 +45,17 @@
     - Updated all country configs to use `demand_scenario: reference` instead of `demand_scenario: baseline` in baseline sections.
     - Fixed Bosnia-Herzegovina config to reference correct emission factors filename: `emission_factors_Bosnia_Herzegowina.csv`.
   - Verified all six countries (Albania, Bosnia-Herzegovina, Kosovo, North Macedonia, Serbia, Montenegro) run successfully and generate emissions outputs for all scenarios.
+
+  # Commit 5: Add all-countries emissions aggregator
+  - New script `scripts/run_calc_emissions_all.py` runs the emissions calculator for all country configs
+    and aggregates per-scenario deltas across countries.
+  - Aggregated outputs are written to `resources/All_countries/<scenario>/{co2,nox,sox,pm25,gwp100}.csv`.
+  - Updated `README.md` with usage instructions for single-country and all-countries runs.
+
+## 2025-11-03
+  # Commit 1: Per-country resources + unit test
+  - `scripts/run_calc_emissions_all.py` now writes per-country scenario deltas to `resources/<Country>/<scenario>/*.csv` (in addition to aggregated outputs).
+  - Added unit test `tests/test_run_calc_emissions_all.py` which verifies the per-country CSV writer produces `year,delta` CSVs with expected values.
 
 
 

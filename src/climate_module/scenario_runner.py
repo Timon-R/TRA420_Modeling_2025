@@ -79,11 +79,17 @@ def _time_config(spec: ScenarioSpec) -> Mapping[str, float]:
 
 
 def _build_timepoints(cfg: Mapping[str, float]) -> np.ndarray:
-    return np.arange(
-        cfg["start_year"] + cfg["timestep"] / 2,
-        cfg["end_year"] + cfg["timestep"] / 2,
-        cfg["timestep"],
-    )
+    start_year = float(cfg["start_year"])
+    end_year = float(cfg["end_year"])
+    timestep = float(cfg["timestep"])
+    if timestep <= 0:
+        raise ValueError("timestep must be positive.")
+    steps = int(round((end_year - start_year) / timestep))
+    if steps <= 0:
+        raise ValueError("Time configuration results in zero steps; check start/end years.")
+    start = start_year + timestep / 2
+    end = end_year - timestep / 2
+    return np.linspace(start, end, steps)
 
 
 def _prepare_adjustments(
