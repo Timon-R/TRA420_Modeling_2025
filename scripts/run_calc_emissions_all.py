@@ -153,43 +153,58 @@ def _accumulate_result(target: EmissionScenarioResult, addition: EmissionScenari
 def _build_aggregated_results(
     per_country_results: List[dict[str, EmissionScenarioResult]],
 ) -> dict[str, EmissionScenarioResult]:
-    baseline_agg: EmissionScenarioResult | None = None
-    scenario_aggs: Dict[str, EmissionScenarioResult] = {}
+    # New aggregation: input per_country_results is a list where each element is a
+    # mapping of scenario keys of the form '<mix>/<demand>' -> EmissionScenarioResult.
+    # We aggregate per '<mix>' and compute deltas for each '<mix>/<demand>' vs
+    # the '<mix>/baseline' aggregated totals.
+    baseline_aggs: Dict[str, EmissionScenarioResult] = {}
+    scenario_aggs: Dict[tuple[str, str], EmissionScenarioResult] = {}
 
     for result_map in per_country_results:
-        baseline = result_map["baseline"]
-        if baseline_agg is None:
-            baseline_agg = _clone_result(baseline)
-        else:
-            _accumulate_result(baseline_agg, baseline)
-
         for scenario_name, scenario_res in result_map.items():
-            if scenario_name == "baseline":
+            if "/" not in scenario_name:
+                # Skip unexpected keys
                 continue
-            agg = scenario_aggs.get(scenario_name)
-            if agg is None:
-                agg = _clone_result(scenario_res)
-                scenario_aggs[scenario_name] = agg
+            mix, demand = scenario_name.split("/", 1)
+            if demand == "baseline":
+                agg = baseline_aggs.get(mix)
+                if agg is None:
+                    baseline_aggs[mix] = _clone_result(scenario_res)
+                else:
+                    _accumulate_result(agg, scenario_res)
             else:
-                _accumulate_result(agg, scenario_res)
+                key = (mix, demand)
+                agg = scenario_aggs.get(key)
+                if agg is None:
+                    scenario_aggs[key] = _clone_result(scenario_res)
+                else:
+                    _accumulate_result(agg, scenario_res)
 
-    if baseline_agg is None:
-        raise ValueError("No baseline results aggregated; ensure country configs exist.")
+    if not baseline_aggs:
+        raise ValueError("No baseline results aggregated; ensure country configs include a 'baseline' demand scenario.")
 
-    # Recompute deltas against aggregated baseline
-    baseline_co2 = baseline_agg.total_emissions_mt.get("co2")
-    for _scenario_name, scenario_res in scenario_aggs.items():
-        totals = scenario_res.total_emissions_mt.get("co2")
-        if totals is None or baseline_co2 is None:
-            continue
-        totals = totals.reindex(baseline_co2.index.union(totals.index), fill_value=0.0)
-        baseline_aligned = baseline_co2.reindex(totals.index, fill_value=0.0)
-        scenario_res.delta_mtco2 = totals - baseline_aligned
+    # Recompute deltas for each aggregated scenario against the corresponding mix baseline
+    aggregated: Dict[str, EmissionScenarioResult] = {}
+    for (mix, demand), agg_res in scenario_aggs.items():
+        baseline_res = baseline_aggs.get(mix)
+        if baseline_res is None:
+            # No baseline for this mix; keep totals as-is and zero deltas
+            agg_res.delta_mtco2 = agg_res.delta_mtco2 * 0.0
+        else:
+            baseline_co2 = baseline_res.total_emissions_mt.get("co2")
+            totals = agg_res.total_emissions_mt.get("co2")
+            if totals is not None and baseline_co2 is not None:
+                totals = totals.reindex(baseline_co2.index.union(totals.index), fill_value=0.0)
+                baseline_aligned = baseline_co2.reindex(totals.index, fill_value=0.0)
+                agg_res.delta_mtco2 = totals - baseline_aligned
 
-    baseline_agg.delta_mtco2 = baseline_agg.delta_mtco2 * 0.0
+        aggregated[f"{mix}/{demand}"] = agg_res
 
-    aggregated: Dict[str, EmissionScenarioResult] = {"baseline": baseline_agg}
-    aggregated.update(scenario_aggs)
+    # Include aggregated baselines for each mix (with zero deltas)
+    for mix, base in baseline_aggs.items():
+        base.delta_mtco2 = base.delta_mtco2 * 0.0
+        aggregated[f"{mix}/baseline"] = base
+
     return aggregated
 
 
@@ -199,7 +214,9 @@ def _write_outputs(
     results_dir: Path | None,
     resources_root: Path | None,
 ) -> None:
-    baseline = aggregated["baseline"]
+    # Aggregated keys are '<mix>/<demand>'. For each key, find the corresponding
+    # mix baseline at '<mix>/baseline' to compute deltas. CSVs contain columns
+    # 'year', 'absolute', and 'delta'. Files are written to dest/<mix>/<demand>/<pollutant>.csv
     for scenario_name, scenario_res in aggregated.items():
         destinations = [resources_dir]
         if results_dir is not None:
@@ -207,16 +224,29 @@ def _write_outputs(
         if resources_root is not None:
             destinations.append(resources_root)
 
+        mix = scenario_name.split("/", 1)[0] if "/" in scenario_name else None
+        baseline_name = f"{mix}/baseline" if mix is not None else None
+
         for dest in destinations:
             scenario_dir = dest / scenario_name
             scenario_dir.mkdir(parents=True, exist_ok=True)
             for pollutant, totals in scenario_res.total_emissions_mt.items():
-                baseline_totals = baseline.total_emissions_mt.get(pollutant)
+                baseline_totals = None
+                if baseline_name is not None:
+                    baseline_res = aggregated.get(baseline_name)
+                    if baseline_res is not None:
+                        baseline_totals = baseline_res.total_emissions_mt.get(pollutant)
+
                 if baseline_totals is None:
                     delta = totals
                 else:
                     delta = totals - baseline_totals.reindex(totals.index, fill_value=0.0)
-                df = pd.DataFrame({"year": delta.index.astype(int), "delta": delta.values})
+
+                df = pd.DataFrame({
+                    "year": totals.index.astype(int),
+                    "absolute": totals.values,
+                    "delta": delta.values,
+                })
                 (scenario_dir / f"{pollutant}.csv").parent.mkdir(parents=True, exist_ok=True)
                 df.to_csv(scenario_dir / f"{pollutant}.csv", index=False)
 
@@ -266,17 +296,25 @@ def run_all_countries(
             results_run_directory=run_directory,
         )
 
-        filtered_results = {"baseline": results["baseline"]}
-        available_scenarios = set(results.keys()) - {"baseline"}
+        # `results` now contains keys of the form '<mix>/<demand>'. Determine
+        # which mix scenarios to include (either provided by scenario_filter or
+        # all mixes present in the results) and collect all matching keys.
+        available_mixes = {name.split("/", 1)[0] for name in results.keys() if "/" in name}
         if scenario_filter:
-            missing = set(scenario_filter) - available_scenarios
+            selected_mixes = [s for s in scenario_filter if s]
+            missing = set(selected_mixes) - available_mixes
             if missing:
-                raise KeyError(f"Country '{country}' missing scenarios: {sorted(missing)}")
-            for scenario_name in scenario_filter:
-                filtered_results[scenario_name] = results[scenario_name]
+                raise KeyError(f"Country '{country}' missing mix scenarios: {sorted(missing)}")
         else:
-            for scenario_name in available_scenarios:
-                filtered_results[scenario_name] = results[scenario_name]
+            selected_mixes = sorted(available_mixes)
+
+        filtered_results: dict[str, EmissionScenarioResult] = {}
+        for name, res in results.items():
+            if "/" not in name:
+                continue
+            mix, demand = name.split("/", 1)
+            if mix in selected_mixes:
+                filtered_results[name] = res
         per_country_results.append(filtered_results)
         per_country_map[country] = filtered_results
 

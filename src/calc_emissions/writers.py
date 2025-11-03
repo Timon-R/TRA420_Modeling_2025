@@ -3,7 +3,7 @@ from typing import Dict, Any
 
 import pandas as pd
 
-from .calculator import EmissionScenarioResult
+from .calculator import EmissionScenarioResult, POLLUTANTS
 
 
 def write_per_country_results(per_country_map: Dict[str, Dict[str, EmissionScenarioResult]], resources_root: Path) -> None:
@@ -13,46 +13,73 @@ def write_per_country_results(per_country_map: Dict[str, Dict[str, EmissionScena
         per_country_map: mapping country -> mapping scenario_name -> EmissionScenarioResult
         resources_root: root path where country folders will be created
 
-    The CSV format is two columns: year, delta (Mt). This mirrors the writer used previously
-    in the scripts module but is placed here so other modules can import it.
+    The CSV format contains three columns: `year`, `absolute` (Mt) and `delta` (Mt).
+    `absolute` is the total emissions for the scenario; `delta` is the difference
+    relative to the mix-specific demand baseline (or zeros when a baseline is not
+    available). Files are written to `resources/<Country>/<mix>/<demand>/<pollutant>.csv`.
     """
     resources_root = Path(resources_root)
     for country, scenarios in per_country_map.items():
-        for scenario_name, result in scenarios.items():
-            # Skip baseline writing (we only write deltas for non-baseline scenarios)
-            if scenario_name.lower() == "baseline":
+        # scenarios keys are expected like '<mix>/<demand>'
+        mixes: Dict[str, Dict[str, EmissionScenarioResult]] = {}
+        for key, res in scenarios.items():
+            if "/" not in key:
                 continue
+            mix, demand = key.split("/", 1)
+            mixes.setdefault(mix, {})[demand] = res
 
-            # Each pollutant is stored in result.total_emissions_mt as dict pollutant -> Series
-            for pollutant, series in (result.total_emissions_mt or {}).items():
-                # The result.delta_mtco2 may be a Series for co2, but for generic pollutants
-                # we compute delta as scenario.total - baseline.total if available on the result
-                # Here we assume result.delta_mtco2 is the delta for CO2; for other pollutants
-                # the EmissionScenarioResult should already contain the correct delta in
-                # result.total_emissions_mt vs baseline. We'll write series - baseline if
-                # delta is not present on the result.
-                out_dir = resources_root / country / scenario_name
-                out_dir.mkdir(parents=True, exist_ok=True)
+        for mix, demand_map in mixes.items():
+            out_dir = resources_root / country / mix
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-                # If the result has a precomputed delta for this pollutant, prefer that.
-                # We store deltas in the 'delta' column in Mt.
-                if hasattr(result, "delta_mtco2") and pollutant == "co2":
-                    delta_series = result.delta_mtco2
+            for pollutant in set().union(*(r.total_emissions_mt.keys() for r in demand_map.values())):
+                unit = POLLUTANTS.get(pollutant, {}).get("unit", "")
+
+                # Determine index (prefer baseline)
+                baseline_res = demand_map.get("baseline")
+                if baseline_res is not None and pollutant in baseline_res.total_emissions_mt:
+                    index = baseline_res.total_emissions_mt[pollutant].index
                 else:
-                    # Fallback: if result._baseline_total is available (private), use it.
-                    # Otherwise, try to use a zero baseline (best-effort).
-                    baseline = getattr(result, "baseline_total_mt", None)
-                    if baseline is not None and pollutant in baseline:
-                        delta_series = series - baseline[pollutant]
-                    else:
-                        # If no baseline is available, assume result has a delta stored as
-                        # attribute `delta_{pollutant}` or else zero-fill.
-                        attr = f"delta_{pollutant}"
-                        delta_series = getattr(result, attr, None)
-                        if delta_series is None:
-                            # Best effort: write zeros
-                            delta_series = pd.Series([0.0] * len(series), index=series.index)
+                    idxs = [s.total_emissions_mt.get(pollutant).index for s in demand_map.values() if pollutant in s.total_emissions_mt]
+                    if not idxs:
+                        continue
+                    index = idxs[0]
+                    for i in idxs[1:]:
+                        index = index.union(i)
 
-                df = pd.DataFrame({"year": list(map(int, delta_series.index)), "delta": list(delta_series.values)})
-                out_path = out_dir / f"{pollutant}.csv"
-                df.to_csv(out_path, index=False)
+                data = {"year": list(map(int, index))}
+                abs_cols = {}
+                for demand_name, res in demand_map.items():
+                    abs_name = f"absolute_{demand_name}"
+                    abs_cols[demand_name] = abs_name
+                    series = res.total_emissions_mt.get(pollutant)
+                    if series is None:
+                        series_aligned = pd.Series([0.0] * len(index), index=index)
+                    else:
+                        series_aligned = series.reindex(index, fill_value=0.0)
+                    data[abs_name] = list(series_aligned.values)
+
+                # Compute deltas vs baseline
+                baseline_series = None
+                if baseline_res is not None:
+                    baseline_series = baseline_res.total_emissions_mt.get(pollutant)
+                    if baseline_series is not None:
+                        baseline_series = baseline_series.reindex(index, fill_value=0.0)
+
+                for demand_name in [d for d in demand_map.keys() if d != "baseline"]:
+                    abs_series = pd.Series(data[abs_cols[demand_name]], index=index)
+                    if baseline_series is None:
+                        delta = abs_series * 0.0
+                    else:
+                        delta = abs_series - baseline_series
+                    data[f"delta_{demand_name}"] = list(delta.values)
+
+                # Order columns: year, absolute_baseline, absolute_..., delta_...
+                cols = ["year"] + [abs_cols[d] for d in sorted(demand_map.keys())] + [f"delta_{d}" for d in sorted(demand_map.keys()) if d != "baseline"]
+                df = pd.DataFrame(data)[cols]
+
+                out_file = out_dir / f"{pollutant}.csv"
+                with out_file.open("w", encoding="utf-8") as fh:
+                    if unit:
+                        fh.write(f"# unit: {unit}\n")
+                    df.to_csv(fh, index=False)

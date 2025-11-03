@@ -121,30 +121,17 @@ def run_from_config(
         Path(module_cfg.get("emission_factors_file", "data/emission_factors.csv"))
     )
 
-    demand_scenarios = module_cfg.get("demand_scenarios", {})
+    # Rename demand scenario key 'reference' -> 'baseline' to avoid confusion with
+    # mix scenario names. Work on a local copy to avoid mutating the original config.
+    raw_demand_scenarios = module_cfg.get("demand_scenarios", {})
+    demand_scenarios: dict[str, Mapping] = {}
+    for k, v in raw_demand_scenarios.items():
+        key = "baseline" if k == "reference" else k
+        if key in demand_scenarios:
+            raise ValueError(f"Duplicate demand scenario name after renaming: {key}")
+        demand_scenarios[key] = v
+
     mix_scenarios = module_cfg.get("mix_scenarios", {})
-
-    baseline_cfg = module_cfg.get("baseline", {})
-    baseline_demand = _resolve_demand_series(
-        years,
-        demand_scenarios,
-        baseline_cfg.get("demand_scenario"),
-        baseline_cfg.get("demand_custom"),
-    )
-    baseline_mix = _resolve_mix_shares(
-        years,
-        mix_scenarios,
-        emission_factors.index,
-        baseline_cfg.get("mix_scenario"),
-        baseline_cfg.get("mix_custom"),
-    )
-
-    baseline = calculate_emissions(
-        name="baseline",
-        demand_series=baseline_demand,
-        mix_shares=baseline_mix,
-        emission_factors=emission_factors,
-    )
 
     output_dir = Path(module_cfg.get("output_directory", "resources"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,55 +142,134 @@ def run_from_config(
     )
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    results: dict[str, EmissionScenarioResult] = {"baseline": baseline}
-    for scenario_cfg in module_cfg.get("scenarios", []):
-        name = scenario_cfg.get("name")
-        if not name:
-            raise ValueError("Each calc_emissions scenario requires a 'name'.")
-        LOGGER.info("Calculating emissions for scenario '%s'", name)
+    # Results keys will be of the form '<mix_name>/<demand_name>' so callers can
+    # easily discover emissions grouped by mix. We also write outputs under
+    # output_dir/<mix_name>/<demand_name> with CSVs containing both absolute
+    # emissions and delta vs the mix-specific demand baseline.
+    results: dict[str, EmissionScenarioResult] = {}
 
-        demand_series = _resolve_demand_series(
-            years,
-            demand_scenarios,
-            scenario_cfg.get("demand_scenario"),
-            scenario_cfg.get("demand_custom"),
-        )
+    if "baseline" not in demand_scenarios:
+        raise ValueError("A demand scenario named 'baseline' (or 'reference') must be provided.")
+
+    for mix_name in mix_scenarios.keys():
+        LOGGER.info("Calculating mix scenario '%s'", mix_name)
+
+        # Resolve mix shares once per mix
         mix_shares = _resolve_mix_shares(
             years,
             mix_scenarios,
             emission_factors.index,
-            scenario_cfg.get("mix_scenario"),
-            scenario_cfg.get("mix_custom"),
+            mix_name,
+            None,
         )
 
-        scenario_result = calculate_emissions(
-            name=name,
-            demand_series=demand_series,
+        # Compute baseline emissions for this mix (demand baseline)
+        baseline_demand = _resolve_demand_series(years, demand_scenarios, "baseline", None)
+        baseline_result = calculate_emissions(
+            name=f"{mix_name}/baseline",
+            demand_series=baseline_demand,
             mix_shares=mix_shares,
             emission_factors=emission_factors,
         )
 
-        scenario_dir = output_dir / name
-        scenario_dir.mkdir(parents=True, exist_ok=True)
+        # Iterate through all demand scenarios (baseline, upper_bound, lower_bound, ...)
+        for demand_name in demand_scenarios.keys():
+            LOGGER.info("  • demand case '%s'", demand_name)
+            demand_series = _resolve_demand_series(years, demand_scenarios, demand_name, None)
+            scenario_result = calculate_emissions(
+                name=f"{mix_name}/{demand_name}",
+                demand_series=demand_series,
+                mix_shares=mix_shares,
+                emission_factors=emission_factors,
+            )
 
-        results_scenario_dir = results_dir / name
-        results_scenario_dir.mkdir(parents=True, exist_ok=True)
+            results[f"{mix_name}/{demand_name}"] = scenario_result
 
-        for pollutant, totals in scenario_result.total_emissions_mt.items():
-            baseline_totals = baseline.total_emissions_mt.get(pollutant)
-            delta = totals.copy() if baseline_totals is None else totals - baseline_totals
+    # After computing all mix/demand scenario results, write per-mix pollutant CSVs
+    # with columns for the baseline absolute and other demand cases plus deltas.
+    # Files are written to output_dir/<mix_name>/<pollutant>.csv and likewise to
+    # results_dir when configured.
+    # Group results by mix
+    mixes: dict[str, dict[str, EmissionScenarioResult]] = {}
+    for key, res in results.items():
+        if "/" not in key:
+            continue
+        mix, demand = key.split("/", 1)
+        mixes.setdefault(mix, {})[demand] = res
 
-            if pollutant == "co2":
-                scenario_result.delta_mtco2 = delta
+    for mix_name, demand_map in mixes.items():
+        mix_dir = output_dir / mix_name
+        mix_dir.mkdir(parents=True, exist_ok=True)
+        mix_results_dir = results_dir / mix_name
+        mix_results_dir.mkdir(parents=True, exist_ok=True)
 
-            df = pd.DataFrame({"year": delta.index.astype(int), "delta": delta.values})
-            file_path = scenario_dir / f"{pollutant}.csv"
-            df.to_csv(file_path, index=False)
+        # Determine baseline series for alignment
+        baseline_res = demand_map.get("baseline")
 
-            results_file_path = results_scenario_dir / f"{pollutant}.csv"
-            df.to_csv(results_file_path, index=False)
+        for pollutant in set().union(*(r.total_emissions_mt.keys() for r in demand_map.values())):
+            unit = POLLUTANTS.get(pollutant, {}).get("unit", "")
 
-        results[name] = scenario_result
+            # Prepare columns: absolute_baseline, absolute_<demand>, delta_<demand>...
+            cols = ["year"]
+            abs_cols = {}
+            for demand_name, res in demand_map.items():
+                abs_name = f"absolute_{demand_name}"
+                abs_cols[demand_name] = abs_name
+                cols.append(abs_name)
+            delta_cols = [f"delta_{d}" for d in demand_map.keys() if d != "baseline"]
+            cols.extend(delta_cols)
+
+            # Use baseline index when available, otherwise union of indexes
+            if baseline_res is not None and pollutant in baseline_res.total_emissions_mt:
+                index = baseline_res.total_emissions_mt[pollutant].index
+            else:
+                # union of all indices
+                idxs = [s.total_emissions_mt.get(pollutant).index for s in demand_map.values() if pollutant in s.total_emissions_mt]
+                if not idxs:
+                    continue
+                index = idxs[0]
+                for i in idxs[1:]:
+                    index = index.union(i)
+
+            data = {"year": list(map(int, index))}
+            # Fill absolute columns
+            for demand_name, abs_name in abs_cols.items():
+                series = demand_map[demand_name].total_emissions_mt.get(pollutant)
+                if series is None:
+                    series_aligned = pd.Series([0.0] * len(index), index=index)
+                else:
+                    series_aligned = series.reindex(index, fill_value=0.0)
+                data[abs_name] = list(series_aligned.values)
+
+            # Compute deltas vs baseline
+            baseline_series = None
+            if baseline_res is not None:
+                baseline_series = baseline_res.total_emissions_mt.get(pollutant)
+                if baseline_series is not None:
+                    baseline_series = baseline_series.reindex(index, fill_value=0.0)
+
+            for demand_name in [d for d in demand_map.keys() if d != "baseline"]:
+                abs_series = pd.Series(data[abs_cols[demand_name]], index=index)
+                if baseline_series is None:
+                    delta = abs_series * 0.0
+                else:
+                    delta = abs_series - baseline_series
+                data[f"delta_{demand_name}"] = list(delta.values)
+
+            df = pd.DataFrame(data)[cols]
+
+            # Write with a commented unit line
+            out_file = mix_dir / f"{pollutant}.csv"
+            with out_file.open("w", encoding="utf-8") as fh:
+                if unit:
+                    fh.write(f"# unit: {unit}\n")
+                df.to_csv(fh, index=False)
+
+            results_out_file = mix_results_dir / f"{pollutant}.csv"
+            with results_out_file.open("w", encoding="utf-8") as fh:
+                if unit:
+                    fh.write(f"# unit: {unit}\n")
+                df.to_csv(fh, index=False)
 
     return results
 
