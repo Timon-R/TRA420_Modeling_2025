@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from calc_emissions import run_from_config  # noqa: E402
+from calc_emissions import run_from_config, EmissionScenarioResult  # noqa: E402
 from config_paths import get_results_run_directory  # noqa: E402
 
 LOGGER = logging.getLogger("calc_emissions.run")
@@ -98,24 +98,37 @@ def main() -> None:
         default_years=global_horizon,
         results_run_directory=run_directory,
     )
-    for name, result in results.items():
-        if name == "baseline":
+
+    # New result keys are '<mix>/<demand>'. Group by mix and print summaries
+    mixes: dict[str, dict[str, EmissionScenarioResult]] = {}
+    for key, res in results.items():
+        if "/" not in key:
+            # Skip unexpected keys (if any)
             continue
-        LOGGER.info(
-            "Scenario '%s' ΔCO₂ (Mt/year):\n%s",
-            name,
-            result.delta_mtco2.to_frame(name="delta_mtco2").to_string(),
-        )
-        totals = {
-            pollutant: result.total_emissions_mt[pollutant]
-            for pollutant in sorted(result.total_emissions_mt)
-        }
-        summary_years = [y for y in [2030, 2050, 2100] if y in result.delta_mtco2.index]
-        if summary_years:
-            summary_df = pd.DataFrame({k: v.loc[summary_years] for k, v in totals.items()})
+        mix, demand = key.split("/", 1)
+        mixes.setdefault(mix, {})[demand] = res
+
+    for mix, demand_map in mixes.items():
+        LOGGER.info("Mix '%s' computed; demand cases: %s", mix, ", ".join(sorted(demand_map.keys())))
+        for demand_name, result in sorted(demand_map.items()):
+            if demand_name == "baseline":
+                continue
             LOGGER.info(
-                "Scenario '%s' totals (Mt) for key years:\n%s", name, summary_df.to_string()
+                "Mix '%s' — demand '%s' ΔCO₂ (Mt/year):\n%s",
+                mix,
+                demand_name,
+                result.delta_mtco2.to_frame(name="delta_mtco2").to_string(),
             )
+            totals = {pollutant: result.total_emissions_mt[pollutant] for pollutant in sorted(result.total_emissions_mt)}
+            summary_years = [y for y in [2030, 2050, 2100] if y in result.delta_mtco2.index]
+            if summary_years:
+                summary_df = pd.DataFrame({k: v.loc[summary_years] for k, v in totals.items()})
+                LOGGER.info(
+                    "Mix '%s' demand '%s' totals (Mt) for key years:\n%s",
+                    mix,
+                    demand_name,
+                    summary_df.to_string(),
+                )
 
 
 if __name__ == "__main__":
