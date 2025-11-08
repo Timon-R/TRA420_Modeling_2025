@@ -43,15 +43,15 @@ calc_emissions:
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
     Reference:
-      description: Baseline mix from 2020 kept constant until 2050.
+      description: Baseline mix (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Albania_reference.csv
     WEM:
-      description: With existing measures. Transition towards renewables as detailed in NECPs.
+      description: With existing measures (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Albania_WEM.csv
     WAM:
-      description: With additional measures. Further acceleration of renewable deployment as detailed in NECPs.
+      description: With additional measures (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Albania_WAM.csv
     # move mix_custom custom_example here so 'custom_example' mix is processed
