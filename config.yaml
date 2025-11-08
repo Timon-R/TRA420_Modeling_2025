@@ -9,9 +9,12 @@ calc_emissions:
     pattern: config_{name}.yaml
     aggregate_output_directory: resources/All_countries
     aggregate_results_directory: results/emissions/All_countries
+    # Scenarios here should list mix scenario NAMES (the top-level mix keys
+    # from each country config). Use the three standard mixes we now expect:
     scenarios:
-      - scenario_1_lower_bound
-      - scenario_1_upper_bound
+      - Reference
+      - WEM
+      - WAM
     #  - custom_example
 
 climate_module:
