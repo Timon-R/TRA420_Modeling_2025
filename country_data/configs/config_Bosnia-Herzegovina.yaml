@@ -7,8 +7,8 @@ calc_emissions:
     end: 2100
     step: 5
   demand_scenarios:
-    reference:
-      description: Bosnia-Herzegovina reference demand (TWh).
+    baseline:
+      description: Bosnia-Herzegovina baseline demand (was 'reference') (TWh).
       values:
         2025: 10.355600
         2027: 10.355600
@@ -26,56 +26,21 @@ calc_emissions:
         2027: 5.904654
         2100: 5.904654
   mix_scenarios:
-    reference:
-      description: Balanced mix with gradual decarbonisation.
-      shares:
-        coal: 0.60
-        gas: 0.10
-        hydro: 0.20
-        wind: 0.05
-        solar: 0.05
-    renewables_push:
-      description: Accelerated deployment of wind and solar.
-      shares:
-        coal: 0.30
-        gas: 0.10
-        hydro: 0.30
-        wind: 0.15
-        solar: 0.10
-        biomass: 0.05
-    fossil_lockin:
-      description: Slower transition away from fossil generation.
-      shares:
-        coal: 0.70
-        gas: 0.15
-        hydro: 0.10
-        wind: 0.03
-        solar: 0.02
+    Reference:
+      description: Baseline mix (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia_and_Hercegovina_reference.csv
+    WEM:
+      description: With existing measures (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia_and_Hercegovina_WEM.csv
+    WAM:
+      description: With additional measures (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia_and_Hercegovina_WAM.csv
   baseline:
-    demand_scenario: reference
-    mix_scenario: reference
-  scenarios:
-    - name: scenario_1_lower_bound
-      demand_scenario: lower_bound
-      mix_scenario: reference
-    - name: scenario_1_upper_bound
-      demand_scenario: upper_bound
-      mix_scenario: reference
-    - name: custom_example
-      demand_custom:
-        2025: 23
-        2030: 25
-        2040: 27
-        2050: 29
-        2060: 31
-        2070: 33
-        2080: 35
-        2090: 37
-        2100: 39
-      mix_custom:
-        shares:
-          coal: 0.40
-          gas: 0.10
-          hydro: 0.30
-          wind: 0.10
-          solar: 0.10
+    demand_scenario: baseline
+    mix_scenario: Reference
+
+  # Move any custom_example entries from `scenarios` into the two maps above
+  # if you want them processed as separate demand/mix cases.
