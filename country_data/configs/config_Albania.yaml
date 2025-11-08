@@ -42,32 +42,18 @@ calc_emissions:
 
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
-    reference:
-      description: Balanced mix with gradual decarbonisation.
-      shares:
-        coal: 0.0
-        gas: 0.0
-        hydro: 0.97
-        wind: 0.02
-        solar: 0.01
-    renewables_push:
-      description: Accelerated deployment of wind and solar.
-      shares:
-        coal: 0.05
-        gas: 0.08
-        hydro: 0.50
-        wind: 0.20
-        solar: 0.15
-        biomass: 0.02
-    fossil_lockin:
-      description: Slower transition away from fossil generation.
-      shares:
-        coal: 0.20
-        gas: 0.15
-        hydro: 0.45
-        wind: 0.10
-        solar: 0.08
-        biomass: 0.02
+    Reference:
+      description: Baseline mix from 2020 kept constant until 2050.
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Albania_reference.csv
+    WEM:
+      description: With existing measures. Transition towards renewables as detailed in NECPs.
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Albania_WEM.csv
+    WAM:
+      description: With additional measures. Further acceleration of renewable deployment as detailed in NECPs.
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Albania_WAM.csv
     # move mix_custom custom_example here so 'custom_example' mix is processed
     custom_example:
       description: custom mix (copy from previous mix_custom)
