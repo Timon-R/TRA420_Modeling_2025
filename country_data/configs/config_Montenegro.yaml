@@ -24,6 +24,7 @@ calc_emissions:
         2025: 2.694
         2027: 1.899
         2100: 1.899
+  # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
     Reference:
       description: Baseline mix (time-series CSV).
@@ -42,5 +43,5 @@ calc_emissions:
     demand_scenario: baseline
     mix_scenario: Reference
 
-  # If you previously had per-scenario 'scenarios' entries, move any custom
-  # demand/mix definitions into `demand_scenarios` and `mix_scenarios`.
+  # Move any custom_example entries from `scenarios` into the two maps above
+  # if you want them processed as separate demand/mix cases.
