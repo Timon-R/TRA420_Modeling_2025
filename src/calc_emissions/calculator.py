@@ -127,25 +127,9 @@ def run_from_config(
         raise ValueError("'emission_factors_file' must be set in the country config and point to a file in data/calc_emissions/emission_factors")
     basename = Path(ef_setting).name
     repo_root = Path(__file__).resolve().parents[2]
-    ef_dir = repo_root / "data" / "calc_emissions" / "emission_factors"
-    ef_path = ef_dir / basename
+    ef_path = repo_root / "data" / "calc_emissions" / "emission_factors" / basename
     if not ef_path.exists():
-        # Try a tolerant basename match (ignore punctuation/diacritics differences)
-        def _normalize(s: str) -> str:
-            return "".join(ch for ch in s.lower() if ch.isalnum())
-
-        target = _normalize(Path(basename).stem)
-        candidates = list(ef_dir.glob("*.csv")) if ef_dir.exists() else []
-        matches = [p for p in candidates if _normalize(p.stem) == target]
-        if len(matches) == 1:
-            ef_path = matches[0]
-            LOGGER.info("Using emission factors file '%s' for requested '%s'", ef_path.name, basename)
-        elif len(matches) > 1:
-            raise FileNotFoundError(
-                f"Multiple candidate emission-factor files found for '{basename}': {[p.name for p in matches]}. Please set exact filename in the country config."
-            )
-        else:
-            raise FileNotFoundError(f"Emission factors file not found in data/calc_emissions/emission_factors: {basename}")
+        raise FileNotFoundError(f"Emission factors file not found in data/calc_emissions/emission_factors: {basename}")
     emission_factors = _load_emission_factors(ef_path)
 
     # Gather demand scenarios. Support both the new map-based `demand_scenarios`

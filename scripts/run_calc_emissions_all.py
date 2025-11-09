@@ -25,19 +25,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 import pandas as pd
-try:
-    import yaml
-except Exception:
-    import sys
-
-    sys.stderr.write(
-        "Missing dependency 'PyYAML' (module name 'yaml').\n"
-        "Install it in your environment, e.g. with:\n"
-        "  conda install -c conda-forge pyyaml\n"
-        "or\n"
-        "  pip install pyyaml\n"
-    )
-    raise
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
