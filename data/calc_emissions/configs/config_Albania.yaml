@@ -1,5 +1,5 @@
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Albania.csv
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Albania.csv
   output_directory: resources/Albania
   years:
     start: 2025

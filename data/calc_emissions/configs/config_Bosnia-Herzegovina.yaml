@@ -1,6 +1,6 @@
 
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Bosnia_Herzegowina.csv
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Bosnia-Herzegovina.csv
   output_directory: resources/Bosnia-Herzegovina
   years:
     start: 2025
@@ -30,15 +30,15 @@ calc_emissions:
     Reference:
       description: Baseline mix (time-series CSV).
       type: timeseries
-      csv: country_data/electricity_mixes/electricity_mix_Bosnia_and_Herzegovina_reference.csv
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia-Herzegovina_reference.csv
     WEM:
       description: With existing measures (time-series CSV).
       type: timeseries
-      csv: country_data/electricity_mixes/electricity_mix_Bosnia_and_Herzegovina_WEM.csv
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia-Herzegovina_WEM.csv
     WAM:
       description: With additional measures (time-series CSV).
       type: timeseries
-      csv: country_data/electricity_mixes/electricity_mix_Bosnia_and_Herzegovina_WAM.csv
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia-Herzegovina_WAM.csv
     # move mix_custom custom_example here so 'custom_example' mix is processed
     custom_example:
       description: custom mix (copy from previous mix_custom)

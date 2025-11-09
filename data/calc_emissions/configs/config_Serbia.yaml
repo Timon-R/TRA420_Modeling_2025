@@ -1,6 +1,6 @@
 
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Serbia.csv
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Serbia.csv
   output_directory: resources/Serbia
   years:
     start: 2025

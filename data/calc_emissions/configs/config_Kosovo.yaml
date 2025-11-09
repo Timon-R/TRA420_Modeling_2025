@@ -1,6 +1,6 @@
 
 calc_emissions:
-  emission_factors_file: country_data/emission_factors_Kosovo.csv
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Kosovo.csv
   output_directory: resources/Kosovo
   years:
     start: 2025

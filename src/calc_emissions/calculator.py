@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 import yaml
+import os
 
 from config_paths import apply_results_run_directory
 
@@ -117,21 +118,87 @@ def run_from_config(
     if fallback_years is None:
         fallback_years = _discover_global_horizon(config_path)
     years = _generate_years(module_cfg.get("years"), fallback_years)
-    emission_factors = _load_emission_factors(
-        Path(module_cfg.get("emission_factors_file", "data/emission_factors.csv"))
-    )
+    # Emission factors must be taken from the repository-wide
+    # data/calc_emissions/emission_factors directory. Country configs should
+    # reference a filename (or relative path) but we will resolve to the
+    # canonical directory and load the basename only.
+    ef_setting = module_cfg.get("emission_factors_file")
+    if not ef_setting:
+        raise ValueError("'emission_factors_file' must be set in the country config and point to a file in data/calc_emissions/emission_factors")
+    basename = Path(ef_setting).name
+    repo_root = Path(__file__).resolve().parents[2]
+    ef_dir = repo_root / "data" / "calc_emissions" / "emission_factors"
+    ef_path = ef_dir / basename
+    if not ef_path.exists():
+        # Try a tolerant basename match (ignore punctuation/diacritics differences)
+        def _normalize(s: str) -> str:
+            return "".join(ch for ch in s.lower() if ch.isalnum())
 
-    # Rename demand scenario key 'reference' -> 'baseline' to avoid confusion with
-    # mix scenario names. Work on a local copy to avoid mutating the original config.
-    raw_demand_scenarios = module_cfg.get("demand_scenarios", {})
+        target = _normalize(Path(basename).stem)
+        candidates = list(ef_dir.glob("*.csv")) if ef_dir.exists() else []
+        matches = [p for p in candidates if _normalize(p.stem) == target]
+        if len(matches) == 1:
+            ef_path = matches[0]
+            LOGGER.info("Using emission factors file '%s' for requested '%s'", ef_path.name, basename)
+        elif len(matches) > 1:
+            raise FileNotFoundError(
+                f"Multiple candidate emission-factor files found for '{basename}': {[p.name for p in matches]}. Please set exact filename in the country config."
+            )
+        else:
+            raise FileNotFoundError(f"Emission factors file not found in data/calc_emissions/emission_factors: {basename}")
+    emission_factors = _load_emission_factors(ef_path)
+
+    # Gather demand scenarios. Support both the new map-based `demand_scenarios`
+    # *and* the legacy pattern where a top-level `baseline` and a `scenarios`
+    # list provide demand_custom/mix_custom entries. Work on a local copy to
+    # avoid mutating the original config.
+    raw_demand_scenarios = module_cfg.get("demand_scenarios", {}) or {}
     demand_scenarios: dict[str, Mapping] = {}
-    for k, v in raw_demand_scenarios.items():
-        key = "baseline" if k == "reference" else k
-        if key in demand_scenarios:
-            raise ValueError(f"Duplicate demand scenario name after renaming: {key}")
-        demand_scenarios[key] = v
 
-    mix_scenarios = module_cfg.get("mix_scenarios", {})
+    # If no explicit demand_scenarios map is provided, try to synthesise one
+    # from legacy `baseline` and `scenarios` entries (used in older configs
+    # and by some unit tests).
+    if not raw_demand_scenarios:
+        # baseline block may contain demand_custom or a pointer to a named scenario
+        baseline_block = module_cfg.get("baseline") or {}
+        if isinstance(baseline_block, Mapping):
+            if "demand_custom" in baseline_block:
+                demand_scenarios["baseline"] = {"values": baseline_block["demand_custom"]}
+            elif "demand_scenario" in baseline_block:
+                # leave resolution to _resolve_demand_series later if needed
+                pass
+
+        for sc in module_cfg.get("scenarios", []) or []:
+            if not isinstance(sc, Mapping):
+                continue
+            name = sc.get("name")
+            if not name:
+                continue
+            if "demand_custom" in sc:
+                demand_scenarios[name] = {"values": sc["demand_custom"]}
+            elif "demand_scenario" in sc:
+                # reference to an existing demand scenario; leave handling to resolver
+                demand_scenarios[name] = {"values": {}}
+    else:
+        for k, v in raw_demand_scenarios.items():
+            key = "baseline" if k == "reference" else k
+            if key in demand_scenarios:
+                raise ValueError(f"Duplicate demand scenario name after renaming: {key}")
+            demand_scenarios[key] = v
+
+    # Mix scenarios: prefer explicit `mix_scenarios` map, but synthesize from
+    # legacy `baseline`/`scenarios` mix_custom entries when absent.
+    mix_scenarios = module_cfg.get("mix_scenarios") or {}
+    if not mix_scenarios:
+        synthesized: dict[str, Mapping] = {}
+        baseline_block = module_cfg.get("baseline") or {}
+        if isinstance(baseline_block, Mapping) and "mix_custom" in baseline_block:
+            synthesized["baseline"] = baseline_block["mix_custom"]
+        for sc in module_cfg.get("scenarios", []) or []:
+            if isinstance(sc, Mapping) and sc.get("name") and "mix_custom" in sc:
+                synthesized[sc["name"]] = sc["mix_custom"]
+        if synthesized:
+            mix_scenarios = synthesized
 
     output_dir = Path(module_cfg.get("output_directory", "resources"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -154,14 +221,33 @@ def run_from_config(
     for mix_name in mix_scenarios.keys():
         LOGGER.info("Calculating mix scenario '%s'", mix_name)
 
-        # Resolve mix shares once per mix
-        mix_shares = _resolve_mix_shares(
-            years,
-            mix_scenarios,
-            emission_factors.index,
-            mix_name,
-            None,
-        )
+        # Resolve mix shares once per mix. Support two mix types:
+        #  - standard 'shares' mapping (handled by _resolve_mix_shares)
+        #  - time-series mixes with 'type: timeseries' and a 'csv' path
+        mix_cfg = mix_scenarios.get(mix_name, {})
+        if isinstance(mix_cfg, dict) and mix_cfg.get("type") == "timeseries" and "csv" in mix_cfg:
+            # Load the timeseries CSV and align to reporting years
+            mix_csv_path = _locate_mix_csv(config_path, mix_cfg["csv"])
+            mix_ts = _load_mix_timeseries(mix_csv_path)  # indexed by year
+            # normalize column names to lower-case technology keys
+            mix_ts.columns = [c.strip().lower() for c in mix_ts.columns.astype(str)]
+            # Reindex to requested years and ensure all technologies from emission_factors are present
+            mix_ts = mix_ts.reindex(years).fillna(0.0)
+            for t in emission_factors.index:
+                if t not in mix_ts.columns:
+                    mix_ts[t] = 0.0
+            mix_ts = mix_ts[list(emission_factors.index)]
+            # Normalize per-year to sum to 1 (avoid division by zero)
+            mix_ts = mix_ts.div(mix_ts.sum(axis=1).replace(0, 1.0), axis=0)
+            mix_shares = mix_ts
+        else:
+            mix_shares = _resolve_mix_shares(
+                years,
+                mix_scenarios,
+                emission_factors.index,
+                mix_name,
+                None,
+            )
 
         # Compute baseline emissions for this mix (demand baseline)
         baseline_demand = _resolve_demand_series(years, demand_scenarios, "baseline", None)
@@ -271,7 +357,43 @@ def run_from_config(
                     fh.write(f"# unit: {unit}\n")
                 df.to_csv(fh, index=False)
 
+    # Back-compatibility: some downstream code and tests expect top-level
+    # scenario keys (e.g. 'baseline', 'policy') rather than the new
+    # '<mix>/<demand>' convention. If the config used legacy `baseline`/
+    # `scenarios` entries (or we synthesised them above), expose flat keys
+    # that point to the corresponding '<name>/<name>' result when present.
+    if module_cfg.get("baseline") or module_cfg.get("scenarios"):
+        for scen in list(demand_scenarios.keys()):
+            compound = f"{scen}/{scen}"
+            if compound in results and scen not in results:
+                results[scen] = results[compound]
+
+    # Also write legacy per-scenario CSVs at output_dir/<scenario>/<pollutant>.csv
+    # containing only 'year' and 'delta' columns so older consumers/tests can
+    # read the simple delta timeseries.
+    if module_cfg.get("baseline") or module_cfg.get("scenarios"):
+        baseline_res = results.get("baseline")
+        for scen in demand_scenarios.keys():
+            res = results.get(scen)
+            if res is None:
+                continue
+            scen_dir = output_dir / scen
+            scen_dir.mkdir(parents=True, exist_ok=True)
+            for pollutant, totals in res.total_emissions_mt.items():
+                if baseline_res is not None:
+                    base = baseline_res.total_emissions_mt.get(pollutant)
+                    if base is not None:
+                        base_aligned = base.reindex(totals.index, fill_value=0.0)
+                        delta = totals.reindex(base_aligned.index, fill_value=0.0) - base_aligned
+                    else:
+                        delta = totals * 0.0
+                else:
+                    delta = totals * 0.0
+                df = pd.DataFrame({"year": totals.index.astype(int), "delta": delta.values})
+                df.to_csv(scen_dir / f"{pollutant}.csv", index=False)
+
     return results
+    
 
 
 def calculate_emissions(
@@ -284,10 +406,10 @@ def calculate_emissions(
     if not isinstance(demand_series.index, pd.Index):
         raise TypeError("demand_series must be a pandas Series with year index")
 
-    # Convert demand_series from TWh to kWh for calculation
-    # 1 TWh = 1e9 kWh
-    demand_kwh = demand_series * 1e9
-    generation = mix_shares.multiply(demand_kwh, axis=0)
+    # demand_series is in TWh and mix_shares are per-technology fractions
+    # (summing to 1 per year). Keep generation in TWh so that multiplying by
+    # emission factors (which are expressed per TWh) yields Mt directly.
+    generation = mix_shares.multiply(demand_series, axis=0)
 
     technology_emissions: dict[str, pd.DataFrame] = {}
     total_emissions: dict[str, pd.Series] = {}
@@ -453,6 +575,92 @@ def _resolve_mix_shares(
         raise ValueError("Mix shares sum to zero for at least one year; cannot normalise.")
     mix_df = mix_df.divide(totals, axis=0)
     return mix_df
+
+
+def _load_mix_timeseries(csv_path):
+    """
+    Load a mix timeseries CSV. Returns a pd.DataFrame indexed by year (int),
+    columns are technology keys (strings), values are shares (floats, sum ~1).
+    """
+    csv_path = os.path.abspath(csv_path)
+    df = pd.read_csv(csv_path)
+    if "year" in df.columns:
+        df = df.set_index("year")
+    else:
+        # assume first column is year if unnamed
+        df = df.set_index(df.columns[0])
+    # ensure integer index
+    df.index = df.index.astype(int)
+    # Ensure column names are strings matching emission_factors 'technology'
+    df.columns = df.columns.astype(str)
+    return df
+
+
+def _locate_mix_csv(config_path: Path, csv_setting: str) -> str:
+    """Locate a mix timeseries CSV file.
+
+    Resolution order:
+      1. If csv_setting is absolute and exists, return it.
+      2. If csv_setting is relative, resolve relative to the country config directory.
+      3. Fall back to repo_root/data/calc_emissions/electricity_mixes/<basename>.
+    """
+    p = Path(csv_setting)
+    # 1: absolute
+    if p.is_absolute() and p.exists():
+        return str(p)
+    # 2: relative to config
+    candidate = (config_path.parent / p).resolve()
+    if candidate.exists():
+        return str(candidate)
+    # 3: repo data directory
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate = repo_root / "data" / "calc_emissions" / "electricity_mixes" / p.name
+    if candidate.exists():
+        return str(candidate)
+    raise FileNotFoundError(f"Mix timeseries CSV not found: tried {csv_setting} and data/calc_emissions/electricity_mixes/{p.name}")
+
+
+def _resolve_generation_by_technology(demand_series, mix_cfg, available_years, emission_factors_index):
+    """
+    demand_series: pd.Series indexed by year (TWh)
+    mix_cfg: dict describing the mix (either has 'shares' dict for constant shares
+             or has 'csv' path for timeseries)
+    available_years: list/int index we want to compute for
+    emission_factors_index: list of technology names expected
+    Returns: pd.DataFrame generation_twh indexed by year, cols=technologies
+    """
+    # initialize empty DataFrame
+    techs = list(emission_factors_index)
+    gen_df = pd.DataFrame(0.0, index=available_years, columns=techs)
+
+    if isinstance(mix_cfg, dict) and mix_cfg.get("type") == "timeseries" and "csv" in mix_cfg:
+        mix_ts = _load_mix_timeseries(mix_cfg["csv"])
+        # Align years: reindex mix_ts to available_years, forward-fill or nearest? use reindex with fillna=0
+        mix_ts = mix_ts.reindex(available_years).fillna(0.0)
+        # Ensure columns for all technologies exist (missing -> 0)
+        for t in techs:
+            if t not in mix_ts.columns:
+                mix_ts[t] = 0.0
+        # Normalize per-year (if desired)
+        mix_ts = mix_ts[techs]
+        mix_ts = mix_ts.div(mix_ts.sum(axis=1).replace(0, 1.0), axis=0)
+        # Multiply demand for each year by the share row
+        for y in available_years:
+            demand_val = demand_series.get(y, 0.0)
+            gen_df.loc[y] = mix_ts.loc[y].values * demand_val
+    else:
+        # legacy constant shares handling (existing behavior)
+        shares = {}
+        if isinstance(mix_cfg, dict) and "shares" in mix_cfg:
+            shares = mix_cfg["shares"]
+        else:
+            # mix_cfg might already be a mapping of shares
+            shares = mix_cfg
+        # ensure share values for all technologies (missing -> 0)
+        for t in techs:
+            s = shares.get(t, 0.0)
+            gen_df[t] = demand_series * float(s)
+    return gen_df
 
 
 def _values_to_series(

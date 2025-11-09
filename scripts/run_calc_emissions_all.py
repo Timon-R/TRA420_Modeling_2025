@@ -25,7 +25,19 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 import pandas as pd
-import yaml
+try:
+    import yaml
+except Exception:
+    import sys
+
+    sys.stderr.write(
+        "Missing dependency 'PyYAML' (module name 'yaml').\n"
+        "Install it in your environment, e.g. with:\n"
+        "  conda install -c conda-forge pyyaml\n"
+        "or\n"
+        "  pip install pyyaml\n"
+    )
+    raise
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -59,7 +71,24 @@ def _load_country_settings() -> (
     run_directory = get_results_run_directory(config)
     module_cfg = config.get("calc_emissions", {})
     countries_cfg = module_cfg.get("countries", {})
-    directory = ROOT / countries_cfg.get("directory", "data/calc_emissions/countries")
+    # default to the new data layout: data/configs for per-country YAMLs
+    configured_dir = countries_cfg.get("directory", "data/configs")
+    directory = ROOT / configured_dir
+    # If the configured directory doesn't exist, try a few common alternate
+    # locations we have used historically so the aggregator is resilient to
+    # small reorganisations (data/calc_emissions/configs, data/configs, etc).
+    if not directory.exists():
+        candidates = [
+            ROOT / configured_dir,
+            ROOT / "data/configs",
+            ROOT / "data/calc_emissions/configs",
+            ROOT / "data/calc_emissions/countries",
+            ROOT / "country_data/configs",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                directory = cand
+                break
     pattern = countries_cfg.get("pattern", "config_{name}.yaml")
     aggregate_output = ROOT / countries_cfg.get(
         "aggregate_output_directory", "resources/All_countries"
@@ -296,27 +325,74 @@ def run_all_countries(
             results_run_directory=run_directory,
         )
 
-        # `results` now contains keys of the form '<mix>/<demand>'. Determine
-        # which mix scenarios to include (either provided by scenario_filter or
-        # all mixes present in the results) and collect all matching keys.
-        available_mixes = {name.split("/", 1)[0] for name in results.keys() if "/" in name}
-        if scenario_filter:
-            selected_mixes = [s for s in scenario_filter if s]
-            missing = set(selected_mixes) - available_mixes
-            if missing:
-                raise KeyError(f"Country '{country}' missing mix scenarios: {sorted(missing)}")
-        else:
-            selected_mixes = sorted(available_mixes)
+        # Load the country config early so we can prefer any explicit demand
+        # ordering it defines when building the aggregated demand list.
+        with cfg_path.open() as handle:
+            cfg = yaml.safe_load(handle) or {}
+        mod_cfg = cfg.get("calc_emissions", {})
+        country_cfg_demands = list(mod_cfg.get("demand_scenarios", {}).keys()) if mod_cfg else []
 
+        # `results` is the dict returned by run_from_config(...) keyed as "<mix>/<demand>"
+        # Enforce that a global list of mix scenarios is configured.
+        # scenario_filter is loaded earlier from CLI or config.yaml (list of mix names)
+        if not scenario_filter:
+            raise RuntimeError(
+                "No mix scenarios configured. Please set calc_emissions.countries.mix_scenarios in config.yaml "
+                "or pass --scenarios on the command line. The aggregator requires an explicit list of mix scenarios "
+                "(e.g. ['Reference','WEM','WAM'])."
+            )
+
+        # discover what mixes/demands the country produced
+        available_mixes = {name.split("/", 1)[0] for name in results.keys() if "/" in name}
+        available_demands = {name.split("/", 1)[1] for name in results.keys() if "/" in name}
+
+        # Ensure the country provides all requested mixes (fail if missing)
+        requested_mixes = set(scenario_filter)
+        missing_mixes = requested_mixes - available_mixes
+        if missing_mixes:
+            raise KeyError(
+                f"Country '{country}' missing required mix scenarios: {sorted(missing_mixes)}. "
+                "Each country must define all mix scenarios listed in config.yaml under calc_emissions.countries.mix_scenarios."
+            )
+
+        # Build demand case list:
+        #  - default demand order (only included if present in the country config/results)
+        #  - then any other demand scenarios present in the country config (sorted for determinism)
+        default_demands = ["baseline", "upper_bound", "lower_bound"]
+
+        # Prefer explicit demand definitions from the country config if present.
+        # `country_cfg_demands` was loaded earlier from the country config file.
+        if country_cfg_demands:
+            # keep defaults first if present, then other user-defined demands (preserve explicit order)
+            demand_order = []
+            for d in default_demands:
+                if d in country_cfg_demands:
+                    demand_order.append(d)
+            for d in country_cfg_demands:
+                if d not in default_demands:
+                    demand_order.append(d)
+            selected_demands = demand_order
+        else:
+            # fallback: derive demand cases from what run_from_config produced
+            selected_demands = [d for d in default_demands if d in available_demands]
+            # append any other detected demands
+            for d in sorted(available_demands):
+                if d not in selected_demands:
+                    selected_demands.append(d)
+
+        # Now filter results to only include keys matching requested mixes and selected demands
         filtered_results: dict[str, EmissionScenarioResult] = {}
         for name, res in results.items():
             if "/" not in name:
                 continue
             mix, demand = name.split("/", 1)
-            if mix in selected_mixes:
+            if mix in requested_mixes and demand in selected_demands:
                 filtered_results[name] = res
-        per_country_results.append(filtered_results)
-        per_country_map[country] = filtered_results
+
+        # Replace results with the filtered mapping for downstream aggregation
+        results = filtered_results
+        per_country_results.append(results)
+        per_country_map[country] = results
 
         with cfg_path.open() as handle:
             cfg = yaml.safe_load(handle) or {}
