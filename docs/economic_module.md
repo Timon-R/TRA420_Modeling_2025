@@ -33,18 +33,18 @@ custom economic trajectories.
 
 Default damage function `damage_dice` implements:
 
-\\[
- D(T) = \delta_1 T + \delta_2 T^2
-\\]
+$$
+D(T) = \delta_1 T + \delta_2 T^2
+$$
 
 with optional extensions:
 
 - **Threshold amplification**:  
-  \\( D(T) \times \left[1 + s \max(0, T - T_\text{th})^p \right] \\)
+  $ D(T) \times \left[1 + s \max(0, T - T_\text{th})^p \right] $
 - **Saturation** (smooth rational or clamp) ensuring damages stay below `max_fraction`.
 - **Catastrophic risk**:
-  - Step: add `disaster_fraction` when \\( T \ge T_\text{cat} \\)
-  - Probabilistic: add based on \\( 1 - e^{-\gamma \max(0, T - T_\text{cat})} \\)
+  - Step: add `disaster_fraction` when $ T \ge T_\text{cat} $
+  - Probabilistic: add based on $ 1 - e^{-\gamma \max(0, T - T_\text{cat})} $
 
 Configuration keys in `config.yaml` > `economic_module.damage_function`
 activate and tune these features.
@@ -61,7 +61,7 @@ activate and tune these features.
 ### Constant Discount
 
 Discount factors:  
-\\( F_t = (1 + r)^{-(t - t_0)} \\) for \\( t \ge t_0 \\), else 0.
+$ F_t = (1 + r)^{-(t - t_0)} $ for $ t \ge t_0 $, else 0.
 
 `compute_scc_constant_discount` applies factors to incremental damages and
 divides by cumulative emission deltas (or `add_tco2` override) to obtain SCC.
@@ -70,15 +70,15 @@ divides by cumulative emission deltas (or `add_tco2` override) to obtain SCC.
 
 Requires population data to compute consumption per capita:
 
-\\[
- C_t = \max(GDP_t - \text{damage}_t, 0) \\
+$$
+C_t = \max(GDP_t - \text{damage}_t, 0) \\
  g_t = \frac{C_t - C_{t-1}}{C_{t-1}}
-\\]
+$$
 
 Discount factors evolve as:
-\\[
- F_{t+1} = \frac{F_t}{1 + \rho + \eta g_{t+1}}
-\\]
+$$
+F_{t+1} = \frac{F_t}{1 + \rho + \eta g_{t+1}}
+$$
 
 `compute_scc_ramsey_discount` stores per-year consumption growth, discount
 factors, and discounted damages in the result details.
@@ -94,7 +94,7 @@ factors, and discounted damages in the result details.
   - `discounted_delta_usd`: the same damages expressed in present-value USD for `base_year`.
   - `damage_attributed_usd`: undiscounted damages allocated to the emission year τ via the kernel/pulse workflow.
   - `discounted_damage_attributed_usd`: present-value (base-year) damages attributable to the emission year τ.
-  - `scc_usd_per_tco2`: SCC(τ) derived as \( \sum_s β_s \Delta D_{s|\tau} / (β_\tau \Delta E_\tau) \); numerically this equals the emission-year SCC expressed in base-year USD because both numerator and denominator are scaled by the corresponding discount factors.
+  - `scc_usd_per_tco2`: SCC(τ) derived as $ \sum_s β_s \Delta D_{s|\tau} / (β_\tau \Delta E_\tau) $; numerically this equals the emission-year SCC expressed in base-year USD because both numerator and denominator are scaled by the corresponding discount factors.
   - `pulse_size_tco2`: (pulse mode only) size of the perturbation applied in each pulse run.
 - `details`: diagnostics (temperature deltas, damages, discount factors).
 - `temperature_kernel`: temperature impulse response when the kernel method is used.
@@ -103,7 +103,7 @@ factors, and discounted damages in the result details.
 Units: GDP and damages originate from the SSP tables rebased to PPP-2020 dollars, so every SCC value is reported as present-value PPP-2020 USD per tonne CO₂ evaluated at `base_year` (2025 in the default configuration). Adjust the GDP inputs if you need a different currency base.
 
 Because emissions are stored in tonnes of CO₂ after applying `emission_to_tonnes`
-(default \(10^6\) converts Mt → t), any downstream multiplication of SCC × ΔE produces
+(default $10^6$ converts Mt → t), any downstream multiplication of SCC × ΔE produces
 damages in USD that are already discounted to `base_year`. The results summary uses this
 relationship to report per-emission-year damages for each discounting method.
 
@@ -200,8 +200,8 @@ Notes
 
 The average SCC (used when `aggregation: average`) retains the familiar ratio:
 
-- Numerator: base-year PV of damages, \( \sum_t β_t \Delta D_t \).
-- Denominator: total emission delta, either \( \sum_t \Delta E_t \) or the explicit
+- Numerator: base-year PV of damages, $ \sum_t β_t \Delta D_t $.
+- Denominator: total emission delta, either $ \sum_t \Delta E_t $ or the explicit
   `add_tco2` override.
 - SCC = Numerator / Denominator.
 

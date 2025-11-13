@@ -48,49 +48,49 @@ configuration and missing preferences fall back by the configured order.
 ## Key Equations
 
 - **Emission ratio**  
-  \\[
-    r_{p,t} = \frac{E^{\text{scenario}}_{p,t}}{E^{\text{baseline}}_{p,t}}
-  \\]
+  $$
+r_{p,t} = \frac{E^{\text{scenario}}_{p,t}}{E^{\text{baseline}}_{p,t}}
+$$
 
 - **Concentration change**  
   Assuming linear scaling,  
-  \\[
-    C^{\text{new}}_{c,p,t} = C^{\text{baseline}}_{c,p} \times r_{p,t}, \qquad
+  $$
+C^{\text{new}}_{c,p,t} = C^{\text{baseline}}_{c,p} \times r_{p,t}, \qquad
     \Delta C_{c,p,t} = C^{\text{new}}_{c,p,t} - C^{\text{baseline}}_{c,p}
-  \\]
+$$
 
 - **Relative-risk slope**  
   With relative risk `RR` specified for a reference delta `Δ_ref`, the slope is
-  \\[
-    \beta_p = \frac{\ln(\text{RR}_p)}{\Delta_{\text{ref}, p}}
-  \\]
+  $$
+\beta_p = \frac{\ln(\text{RR}_p)}{\Delta_{\text{ref}, p}}
+$$
 
 - **Percentage change in mortality**  
-  \\[
-    \Delta m_{c,p,t} = \exp(\beta_p \Delta C_{c,p,t}) - 1
-  \\]
+  $$
+\Delta m_{c,p,t} = \exp(\beta_p \Delta C_{c,p,t}) - 1
+$$
 
 - **Country weighting**  
   Weighted average across countries (weights normalised to sum to 1):
-  \\[
-    \overline{\Delta m}_{p,t} = \sum_c w_{c,p} \Delta m_{c,p,t}
-  \\]
+  $$
+\overline{\Delta m}_{p,t} = \sum_c w_{c,p} \Delta m_{c,p,t}
+$$
   where per-pollutant weights default to module-level weights or equal weighting.
 
 - **Mortality delta (if baseline deaths supplied)**  
-  \\[
-    \Delta D_{p,t} = D^{\text{baseline}}_{p} \times \overline{\Delta m}_{p,t}
-  \\]
+  $$
+\Delta D_{p,t} = D^{\text{baseline}}_{p} \times \overline{\Delta m}_{p,t}
+$$
 
 - **Combined mortality (across pollutants)**  
   Per-year combined mortality uses normalised pollutant weights `w_p` (default
   equal) applied to the weighted percentage changes, multiplied by the
   module-level baseline deaths:
-  \\[
-    \Delta m^{\text{total}}_t = \sum_p w_p \overline{\Delta m}_{p,t}, \qquad
+  $$
+\Delta m^{\text{total}}_t = \sum_p w_p \overline{\Delta m}_{p,t}, \qquad
     \Delta D^{\text{total}}_t = D^{\text{baseline,total}} \times
     \Delta m^{\text{total}}_t
-  \\]
+$$
 
 ## Units and Conventions
 

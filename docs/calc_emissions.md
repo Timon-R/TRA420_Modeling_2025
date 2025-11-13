@@ -28,18 +28,18 @@ and write per-scenario CSVs consumed by downstream modules.
 For technology *i* in year *t*:
 
 1. Generation (TWh):  
-   \( G_{i,t} = D_t \times s_{i,t} \), where \( D_t \) is annual demand (TWh)
-   and \( s_{i,t} \) the technology share.
+   $ G_{i,t} = D_t \times s_{i,t} $, where $ D_t $ is annual demand (TWh)
+   and $ s_{i,t} $ the technology share.
 
 2. Emissions (Mt):  
-   \( E_{i,t} = G_{i,t} \times f_{i} \) with \( f_i \) expressed in Mt/TWh after
+   $ E_{i,t} = G_{i,t} \times f_{i} $ with $ f_i $ expressed in Mt/TWh after
    harmonisation (kg/kWh inputs are numerically identical to Mt/TWh).
 
 3. Aggregate totals by pollutant:  
-   \( E^{\text{tot}}_{p,t} = \sum_i E_{i,t} \)
+   $ E^{\text{tot}}_{p,t} = \sum_i E_{i,t} $
 
 4. Scenario delta vs baseline:  
-   \( \Delta E_{p,t} = E^{\text{scenario}}_{p,t} - E^{\text{baseline}}_{p,t} \)
+   $ \Delta E_{p,t} = E^{\text{scenario}}_{p,t} - E^{\text{baseline}}_{p,t} $
 
 ## Configuration Keys
 

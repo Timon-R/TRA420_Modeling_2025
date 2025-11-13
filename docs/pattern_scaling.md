@@ -62,9 +62,9 @@ Each output file is named `<ISO3>_<original_filename>.csv` and stores:
 Pattern scaling assumes a constant multiplier between global and regional temperature
 responses:
 
-\\[
-  T^{\text{regional}}_{c,t} = S_{c,\text{scenario}} \times T^{\text{global}}_t
-\\]
+$$
+T^{\text{regional}}_{c,t} = S_{c,\text{scenario}} \times T^{\text{global}}_t
+$$
 
 where `S` is the scaling factor drawn from the chosen `patterns.<weighting>` column.
 All three temperature columns (`baseline`, `adjusted`, `delta`) are multiplied by the same

@@ -42,17 +42,17 @@ temperature trajectories for baseline and emission-adjusted scenarios.
 ## Equations & Transformations
 
 - Scalar emission perturbations are expanded as  
-  \\( \Delta E_t = \text{scalar} \\) for all timepoints.
+  $ \Delta E_t = \text{scalar} $ for all timepoints.
 - Callable adjustments `f(timepoints, cfg)` must return an array matching the
   timepoint length; results are interpreted as Gt CO₂/yr.
 - The `step_change` helper creates a piecewise constant change:
-  \\[
-  \Delta E(t) =
+  $$
+\Delta E(t) =
     \begin{cases}
       0 & t < T_{\text{start}} \\
       \Delta & t \ge T_{\text{start}}
     \end{cases}
-  \\]
+$$
   where `Δ` is specified in Mt CO₂/yr and converted to Gt inside the runner.
 - FaIR climate parameters are broadcast to `(config, layer)` matrices using
   `_broadcast_matrix` and `_broadcast_vector`.
