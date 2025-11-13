@@ -100,6 +100,8 @@ factors, and discounted damages in the result details.
 - `temperature_kernel`: temperature impulse response when the kernel method is used.
 - `run_method`: `"kernel"` or `"pulse"` indicating which workflow produced the result.
 
+Units: GDP and damages originate from the SSP tables rebased to PPP-2020 dollars, so every SCC value is reported as present-value PPP-2020 USD per tonne CO₂ evaluated at `base_year` (2025 in the default configuration). Adjust the GDP inputs if you need a different currency base.
+
 Because emissions are stored in tonnes of CO₂ after applying `emission_to_tonnes`
 (default \(10^6\) converts Mt → t), any downstream multiplication of SCC × ΔE produces
 damages in USD that are already discounted to `base_year`. The results summary uses this
