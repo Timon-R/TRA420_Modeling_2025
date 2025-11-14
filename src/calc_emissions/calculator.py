@@ -566,7 +566,8 @@ def _load_mix_timeseries(csv_path):
     Load a mix timeseries CSV. Returns a pd.DataFrame indexed by year (int),
     columns are technology keys (strings), values are shares (floats, sum ~1).
     """
-    csv_path = abspath(csv_path)  # use project helper for consistent semantics
+    # resolve to an absolute path using pathlib (avoid undefined helper `abspath`)
+    csv_path = Path(csv_path).resolve()
     df = pd.read_csv(csv_path)
 
     # set year index (prefer explicit "year" column)
