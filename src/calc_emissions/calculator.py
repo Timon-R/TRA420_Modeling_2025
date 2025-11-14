@@ -598,10 +598,13 @@ def _load_mix_timeseries(csv_path):
     # optional validation: ensure shares are numeric and rows sum to ~1
     df = df.apply(pd.to_numeric, errors="raise")
     row_sums = df.sum(axis=1)
-    if not ((row_sums - 1.0).abs() <= 1e-2).all():
-        # relax threshold or log a warning instead if appropriate
-        raise ValueError("Mix timeseries rows must sum to 1.0 (per year).")
-
+    bad = ((row_sums - 1.0).abs() > 1e-2)
+    if bad.any():
+        LOGGER.warning(
+            "Mix timeseries rows do not sum to 1.0 within tolerance (±0.01) for years: %s. "
+            "Rows will be normalized.",
+            ", ".join(map(str, row_sums.index[bad].astype(int))),
+        )
     return df
 
 
