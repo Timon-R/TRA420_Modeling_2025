@@ -566,17 +566,41 @@ def _load_mix_timeseries(csv_path):
     Load a mix timeseries CSV. Returns a pd.DataFrame indexed by year (int),
     columns are technology keys (strings), values are shares (floats, sum ~1).
     """
-    csv_path = os.path.abspath(csv_path)
+    csv_path = abspath(csv_path)  # use project helper for consistent semantics
     df = pd.read_csv(csv_path)
+
+    # set year index (prefer explicit "year" column)
     if "year" in df.columns:
         df = df.set_index("year")
     else:
-        # assume first column is year if unnamed
         df = df.set_index(df.columns[0])
-    # ensure integer index
-    df.index = df.index.astype(int)
-    # Ensure column names are strings matching emission_factors 'technology'
-    df.columns = df.columns.astype(str)
+
+    # ensure integer year index with clear error if conversion fails
+    df.index = pd.to_numeric(df.index, errors="raise").astype(int)
+
+    # normalize column names: strip, lowercase, replace common separators
+    def normalize_col(s: str) -> str:
+        s = str(s).strip().lower()
+        s = s.replace("-", "_").replace(" ", "_")
+        return s
+
+    cols = [normalize_col(c) for c in df.columns]
+
+    alias_map = {
+        "other_res": "biomass",
+        # add other aliases here, e.g. "pv": "solar", "wind_onshore": "wind"
+    }
+
+    mapped_cols = [alias_map.get(c, c) for c in cols]
+    df.columns = mapped_cols
+
+    # optional validation: ensure shares are numeric and rows sum to ~1
+    df = df.apply(pd.to_numeric, errors="raise")
+    row_sums = df.sum(axis=1)
+    if not ((row_sums - 1.0).abs() <= 1e-2).all():
+        # relax threshold or log a warning instead if appropriate
+        raise ValueError("Mix timeseries rows must sum to 1.0 (per year).")
+
     return df
 
 
