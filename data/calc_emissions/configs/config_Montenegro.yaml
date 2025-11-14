@@ -5,6 +5,8 @@ calc_emissions:
     start: 2025
     end: 2100
     step: 5
+  
+  # Demand cases processed for every mix (must contain 'baseline' or at least a key named 'baseline')
   demand_scenarios:
     baseline:
       description: Montenegro baseline demand (was 'reference') (TWh).
@@ -24,6 +26,20 @@ calc_emissions:
         2025: 2.694
         2027: 1.899
         2100: 1.899
+    # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
+    custom_example_demand:
+      description: Custom demand example (TWh).
+      values:
+        2025: 13
+        2030: 15
+        2040: 17
+        2050: 19
+        2060: 21
+        2070: 23
+        2080: 25
+        2090: 27
+        2100: 29
+
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
     Reference:
@@ -38,10 +54,16 @@ calc_emissions:
       description: With additional measures (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Montenegro_WAM.csv
-  # Baseline references the scenario keys above
-  baseline:
-    demand_scenario: baseline
-    mix_scenario: Reference
+    # move mix_custom custom_example here so 'custom_example' mix is processed
+    custom_example_mix:
+      description: custom mix (copy from previous mix_custom)
+      shares:
+        coal: 0.08
+        gas: 0.12
+        hydro: 0.55
+        wind: 0.13
+        solar: 0.10
+  
 
   # Move any custom_example entries from `scenarios` into the two maps above
   # if you want them processed as separate demand/mix cases.

@@ -320,15 +320,18 @@ def run_all_countries(
         mod_cfg = cfg.get("calc_emissions", {})
         country_cfg_demands = list(mod_cfg.get("demand_scenarios", {}).keys()) if mod_cfg else []
 
-        # `results` is the dict returned by run_from_config(...) keyed as "<mix>/<demand>"
+        # `results` is the dict returned by run_from_config(...) keyed like "<mix>/<demand>"
         # Enforce that a global list of mix scenarios is configured.
         # scenario_filter is loaded earlier from CLI or config.yaml (list of mix names)
         if not scenario_filter:
-            raise RuntimeError(
-                "No mix scenarios configured. Please set calc_emissions.countries.mix_scenarios in config.yaml "
-                "or pass --scenarios on the command line. The aggregator requires an explicit list of mix scenarios "
-                "(e.g. ['Reference','WEM','WAM'])."
-            )
+            # No global mix list provided — default to the mixes produced for this country.
+            available_mixes = {name.split("/", 1)[0] for name in results.keys() if "/" in name}
+            if not available_mixes:
+                raise RuntimeError(
+                    "No mix scenarios found for country '{}'. Please ensure the country config defines mix_scenarios or pass --scenarios.".format(country)
+                )
+            scenario_filter = sorted(available_mixes)
+            LOGGER.info("No global mix list provided; using country mixes: %s", scenario_filter)
 
         # discover what mixes/demands the country produced
         available_mixes = {name.split("/", 1)[0] for name in results.keys() if "/" in name}

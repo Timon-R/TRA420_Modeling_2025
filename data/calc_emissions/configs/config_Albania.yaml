@@ -27,7 +27,7 @@ calc_emissions:
         2027: 3.893849
         2100: 3.893849
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
-    custom_example:
+    custom_example_demand:
       description: Custom demand example (TWh).
       values:
         2025: 13
@@ -55,7 +55,7 @@ calc_emissions:
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Albania_WAM.csv
     # move mix_custom custom_example here so 'custom_example' mix is processed
-    custom_example:
+    custom_example_mix:
       description: custom mix (copy from previous mix_custom)
       shares:
         coal: 0.08
