@@ -29,6 +29,19 @@ population projections from `gdp_population_directory` (expects `GDP_SSP1_5.xlsx
 `POP_SSP1_5.xlsx`, readable via pandas + openpyxl). Provide `gdp_series` only if you need to override the SSP tables with
 custom economic trajectories.
 
+### DICE socioeconomics mode
+
+Alternatively, populate the top-level `socioeconomics` block in `config.yaml` with
+`mode: dice`. The associated `dice` settings use the DICE capital-TFP-population
+equations (logistic population, declining TFP growth, Cobb–Douglas output, and a
+fixed savings/depreciation pair) to generate a GDP/population table that spans the
+full SCC evaluation horizon. `run_scc.py` feeds this synthetic series into
+`EconomicInputs.from_csv` via the new `gdp_frame` parameter, so no SSP workbook or
+GDP CSV is required when you want a purely DICE-consistent socio-economic baseline.
+Set `socioeconomics.dice.scenario` to an explicit SSP (e.g. `SSP2`) or to
+`as_climate_scenario` so each climate pathway automatically reuses the matching
+SSP family when building its DICE projection.
+
 ## Damage Functions
 
 Default damage function `damage_dice` implements:

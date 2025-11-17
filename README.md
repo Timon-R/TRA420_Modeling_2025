@@ -90,10 +90,19 @@ Typical workflow (driven by `config.yaml`):
 
 1. **Emissions** – `python scripts/run_calc_emissions.py --country <name>` (per-country deltas) or `python scripts/run_calc_emissions_all.py` (aggregated deltas); run before downstream modules so `resources/calc_emissions/`, `resources/<scenario>/`, and `resources/All_countries/` hold current data.
 2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate mortality percentage changes.
-3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column.
+3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv` and mirrors to `resources/climate/`. Each CSV now includes a `climate_scenario` column. The run also produces background baseline CSVs (`background_climate_full.csv`, `background_climate_horizon.csv`) plus plots written directly to `results/summary/plots` so downstream SCC runs and the final summary share the same reference trajectory.
 4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
 5. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
-6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles key indicators and plots. Emission and mortality plots collapse SSP suffixes (identical across climate pathways), while SCC and temperature remain pathway‑specific.
+6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles key indicators and plots. Emission and mortality plots collapse SSP suffixes (identical across climate pathways), while SCC and temperature remain pathway-specific. The summary plot folder now also mirrors the background climate graphics and adds a `socioeconomics.png` panel showing the GDP/population trajectories used in the SCC calculations.
+
+## Socioeconomics & FaIR calibration
+
+- The new `socioeconomics` block in `config.yaml` (default mode `dice`) replaces the old SSP lookup with a DICE-style projection. Population follows logistic growth using scenario-specific asymptotes, total factor productivity declines gradually, and capital evolves via DICE’s savings/depreciation rules. These trajectories feed directly into `run_scc.py` without relying on external GDP/POP workbooks.
+- The climate module now supports calibrated FaIR runs via `climate_module.fair.calibration`. Provide the local calibration dataset once (this repo ships `data/FaIR_calibration_data/v1.5.0`) and the runner will:
+  - pick the requested posterior ensemble member,
+  - replace FaIR’s carbon-cycle pools, CH₄ lifetime terms, and F₂× forcing with the calibrated values,
+  - replay the CMIP7 historical emissions plus solar/volcanic forcings from 1750 before transitioning to each SSP scenario.
+  No `pooch` downloads are required—the files are read directly from the specified `base_path`.
 
 ## Testing
 

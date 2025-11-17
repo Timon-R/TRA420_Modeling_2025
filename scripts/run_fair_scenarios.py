@@ -49,13 +49,16 @@ inject it into the adjusted configuration automatically.
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
 
 from climate_module import DEFAULT_TIME_CONFIG, ScenarioSpec, run_scenarios, step_change
+from climate_module.calibration import FairCalibration, load_fair_calibration
 from config_paths import apply_results_run_directory, get_results_run_directory
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,33 +75,41 @@ def _load_config() -> dict:
 
 ROOT_CONFIG = _load_config()
 CONFIG = ROOT_CONFIG.get("climate_module", {})
-GLOBAL_HORIZON = ROOT_CONFIG.get("time_horizon", {})
+TIME_HORIZON = ROOT_CONFIG.get("time_horizon", {})
 ECONOMIC_CFG = ROOT_CONFIG.get("economic_module", {})
 RESULTS_RUN_DIRECTORY = get_results_run_directory(ROOT_CONFIG)
 
 PARAMETERS = CONFIG.get("parameters", {})
 
-GLOBAL_START = float(GLOBAL_HORIZON.get("start", DEFAULT_TIME_CONFIG["start_year"]))
-GLOBAL_END = float(GLOBAL_HORIZON.get("end", DEFAULT_TIME_CONFIG["end_year"]))
-GLOBAL_STEP = float(GLOBAL_HORIZON.get("step", 5.0))
+HORIZON_START = float(TIME_HORIZON.get("start", DEFAULT_TIME_CONFIG["start_year"]))
+HORIZON_END = float(TIME_HORIZON.get("end", DEFAULT_TIME_CONFIG["end_year"]))
+HORIZON_STEP = float(TIME_HORIZON.get("step", 5.0))
+CLIMATE_START = float(PARAMETERS.get("start_year", 1750.0))
+if CLIMATE_START > 1750.0:
+    CLIMATE_START = 1750.0
+CLIMATE_END = float(max(HORIZON_END, HORIZON_START))
 DAMAGE_DURATION = ECONOMIC_CFG.get("damage_duration_years")
 if isinstance(DAMAGE_DURATION, (int, float)) and DAMAGE_DURATION > 0:
-    extended_end = GLOBAL_START + int(DAMAGE_DURATION) - 1
-    CLIMATE_END = float(max(GLOBAL_END, extended_end))
-else:
-    CLIMATE_END = GLOBAL_END
+    extended_end = HORIZON_START + int(DAMAGE_DURATION) - 1
+    CLIMATE_END = float(max(CLIMATE_END, extended_end))
 CLIMATE_TIMESTEP = 1.0
 BASE_CLIMATE_SETUP = PARAMETERS.get("climate_setup", "ar6")
+WARMING_REFERENCE_START = float(PARAMETERS.get("warming_reference_start_year", 1850.0))
+WARMING_REFERENCE_END = float(PARAMETERS.get("warming_reference_end_year", 1900.0))
+HORIZON_START_INT = int(round(HORIZON_START))
+HORIZON_END_INT = int(round(HORIZON_END))
+
+BACKGROUND_RECORDS: list[dict[str, float]] = []
 
 DEFAULT_TIME_CONFIG.update(
     {
-        "start_year": GLOBAL_START,
+        "start_year": CLIMATE_START,
         "end_year": CLIMATE_END,
         "timestep": CLIMATE_TIMESTEP,
     }
 )
 
-BASE_START = GLOBAL_START
+BASE_START = CLIMATE_START
 BASE_END = CLIMATE_END
 BASE_TIMESTEP = CLIMATE_TIMESTEP
 
@@ -111,6 +122,10 @@ OVERRIDE_KEYS = {
 }
 
 BASE_OVERRIDES = {key: PARAMETERS[key] for key in OVERRIDE_KEYS if key in PARAMETERS}
+FAIR_CALIBRATION_CFG = CONFIG.get("fair", {}).get("calibration", {})
+FAIR_CALIBRATION: FairCalibration | None = load_fair_calibration(
+    FAIR_CALIBRATION_CFG, repo_root=ROOT
+)
 
 DEFAULT_ADJUSTMENT_SPECIE = PARAMETERS.get("adjustment_specie", "CO2 FFI")
 DEFAULT_ADJUSTMENT_DELTA = float(PARAMETERS.get("adjustment_delta", -2.0))
@@ -118,7 +133,7 @@ DEFAULT_ADJUSTMENT_START = float(PARAMETERS.get("adjustment_start_year", 2025))
 ADJUSTMENT_CSV = PARAMETERS.get("adjustment_timeseries_csv")
 
 SUMMARY_CANDIDATES = {2030, 2050, 2100, int(round(CLIMATE_END))}
-SUMMARY_YEARS = sorted(year for year in SUMMARY_CANDIDATES if GLOBAL_START <= year <= CLIMATE_END)
+SUMMARY_YEARS = sorted(year for year in SUMMARY_CANDIDATES if CLIMATE_START <= year <= CLIMATE_END)
 
 # Emission label used as the reference/baseline in downstream modules. We keep
 # the baseline CSVs in resources/ (consumed by SCC), but avoid duplicating them
@@ -129,11 +144,11 @@ REFERENCE_EMISSION_LABEL = str(ECONOMIC_CFG.get("reference_scenario", "baseline"
 def _derive_sample_years(option: str) -> list[int]:
     option = option.lower()
     if option == "full":
-        start = int(GLOBAL_START)
+        start = int(CLIMATE_START)
         end = int(CLIMATE_END)
         return list(range(start, end + 1))
 
-    start = int(GLOBAL_START)
+    start = int(CLIMATE_START)
     end = int(CLIMATE_END)
     years: list[int] = [start]
     threshold = max(2050, start)
@@ -147,7 +162,7 @@ def _derive_sample_years(option: str) -> list[int]:
     if years[-1] != end:
         years.append(end)
     # Ensure reasonable spacing when the horizon is coarse (e.g., 5-year steps)
-    fallback_step = max(1, int(round(GLOBAL_STEP)))
+    fallback_step = max(1, int(round(HORIZON_STEP)))
     filled = list(range(start, end + 1, fallback_step))
     combined = sorted(set(years) | set(filled))
     return [year for year in combined if start <= year <= end]
@@ -165,6 +180,17 @@ RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
 EMISSION_DIR = ROOT / CONFIG.get("emission_timeseries_directory", "resources")
 EMISSION_DIR.mkdir(parents=True, exist_ok=True)
+
+SUMMARY_CFG = ROOT_CONFIG.get("results", {}).get("summary", {}) or {}
+_summary_dir_cfg = SUMMARY_CFG.get("output_directory", "results/summary")
+_summary_dir_path = Path(_summary_dir_cfg)
+if not _summary_dir_path.is_absolute():
+    _summary_dir_path = (ROOT / _summary_dir_path).resolve()
+SUMMARY_OUTPUT_DIR = apply_results_run_directory(
+    _summary_dir_path,
+    RESULTS_RUN_DIRECTORY,
+    repo_root=ROOT,
+)
 
 
 def _discover_emission_map() -> dict[str, Path]:
@@ -260,6 +286,8 @@ def build_scenarios() -> list[ScenarioSpec]:
             compute_kwargs = {"climate_setup": climate_setup}
             if overrides:
                 compute_kwargs["climate_overrides"] = overrides
+            if FAIR_CALIBRATION is not None:
+                compute_kwargs["fair_calibration"] = FAIR_CALIBRATION
 
             specs.append(
                 ScenarioSpec(
@@ -349,13 +377,88 @@ def _timeseries_adjustment(rel_path: Path):
     return builder
 
 
+def _apply_reference_offset(result) -> None:
+    mask = (result.years >= WARMING_REFERENCE_START) & (result.years <= WARMING_REFERENCE_END)
+    if not np.any(mask):
+        raise ValueError(
+            "Warming reference window does not overlap the simulated years; "
+            "adjust 'warming_reference_start_year'/'end_year'."
+        )
+    offset = float(np.mean(result.baseline[mask]))
+    result.baseline = result.baseline - offset
+    result.adjusted = result.adjusted - offset
+
+
+def _record_background(spec: ScenarioSpec, result) -> None:
+    if not spec.label.startswith(f"{REFERENCE_EMISSION_LABEL}_"):
+        return
+    for year, temp in zip(result.years, result.baseline, strict=False):
+        BACKGROUND_RECORDS.append(
+            {
+                "year": int(year),
+                "temperature_c": float(temp),
+                "climate_scenario": spec.scenario,
+            }
+        )
+
+
+def _plot_background(df: pd.DataFrame, path: Path, title: str) -> None:
+    if df.empty:
+        return
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    for scenario, group in df.groupby("climate_scenario"):
+        ax.plot(group["year"], group["temperature_c"], label=scenario)
+    ax.axhline(0.0, color="#666", linewidth=0.8, linestyle="--")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Temperature anomaly (°C relative to 1850-1900)")
+    ax.set_title(title)
+    ax.legend(loc="best")
+    ax.grid(True, linewidth=0.3, alpha=0.5)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _export_background_products() -> None:
+    if not BACKGROUND_RECORDS:
+        return
+    df = pd.DataFrame(BACKGROUND_RECORDS)
+    df = df.sort_values(["climate_scenario", "year"]).reset_index(drop=True)
+    full_csv = OUTPUT_DIR / "background_climate_full.csv"
+    df.to_csv(full_csv, index=False)
+    shutil.copyfile(full_csv, RESOURCE_DIR / full_csv.name)
+    plot_dir = SUMMARY_OUTPUT_DIR / "plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    _plot_background(
+        df,
+        plot_dir / "background_climate_full.png",
+        "Background climate (full history)",
+    )
+
+    horizon_mask = (df["year"] >= HORIZON_START_INT) & (df["year"] <= HORIZON_END_INT)
+    horizon_df = df[horizon_mask].copy()
+    if not horizon_df.empty:
+        horizon_csv = OUTPUT_DIR / "background_climate_horizon.csv"
+        horizon_df.to_csv(horizon_csv, index=False)
+        shutil.copyfile(horizon_csv, RESOURCE_DIR / horizon_csv.name)
+        _plot_background(
+            horizon_df,
+            plot_dir / "background_climate_horizon.png",
+            f"Background climate ({HORIZON_START_INT}-{HORIZON_END_INT})",
+        )
+
+
 def main() -> None:
+    BACKGROUND_RECORDS.clear()
     specs = build_scenarios()
     results = run_scenarios(specs)
     for spec in specs:
         result = results[spec.label]
+        _apply_reference_offset(result)
+        _record_background(spec, result)
         _write_csv(spec.label, spec.scenario, result)
         _print_summary(spec.label, result)
+    _export_background_products()
 
 
 if __name__ == "__main__":

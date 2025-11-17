@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -14,6 +15,8 @@ import numpy as np
 import pandas as pd
 
 from config_paths import apply_results_run_directory, get_results_run_directory
+from economic_module.scc import _load_ssp_economic_data
+from economic_module.socioeconomics import DiceSocioeconomics
 
 LOGGER = logging.getLogger("results.summary")
 
@@ -34,6 +37,9 @@ class SummarySettings:
     run_method: str = "kernel"
     scc_output_directory: Path | None = None
     base_year: int = 2025
+    climate_output_directory: Path | None = None
+    gdp_series: dict[str, dict[int, float]] | None = None
+    population_series: dict[str, dict[int, float]] | None = None
 
 
 @dataclass(slots=True)
@@ -107,6 +113,38 @@ def _split_climate_suffix(name: str, climate_labels: Sequence[str]) -> tuple[str
         if name.endswith(suffix):
             return name[: -len(suffix)], label
     return name, None
+
+
+def _scenario_climate_label(scenario: str, climate_labels: Sequence[str]) -> str | None:
+    if not climate_labels:
+        return None
+    _, climate_label = _split_climate_suffix(scenario, climate_labels)
+    return climate_label
+
+
+def _infer_ssp_family_from_label(label: str | None) -> str:
+    if not label:
+        return "SSP2"
+    match = re.match(r"ssp\s*([0-9])", label, re.IGNORECASE)
+    if match:
+        return f"SSP{match.group(1)}"
+    return "SSP2"
+
+
+def _collapse_by_climate_label(
+    data: Mapping[str, dict[int, float]] | None, climate_labels: Sequence[str]
+) -> dict[str, dict[int, float]]:
+    if not data:
+        return {}
+    if not climate_labels:
+        return dict(data)
+    collapsed: dict[str, dict[int, float]] = {}
+    for scenario, series in data.items():
+        base, label = _split_climate_suffix(scenario, climate_labels)
+        key = label or base or scenario
+        if key not in collapsed:
+            collapsed[key] = dict(series)
+    return collapsed
 
 
 def _resolve_directory(path: Path, label: str) -> Path:
@@ -200,6 +238,119 @@ def _load_scc_summary_table(path: Path) -> dict[str, dict[str, float]]:
         if safe not in summary:
             summary[safe] = store
     return summary
+
+
+def _collect_socio_series(
+    root: Path,
+    config: Mapping[str, object],
+    scenario_labels: Iterable[str],
+    climate_labels: Sequence[str],
+    run_directory: str | None,
+    plot_end: int,
+) -> tuple[dict[str, dict[int, float]] | None, dict[str, dict[int, float]] | None]:
+    economic_cfg = config.get("economic_module", {}) or {}
+    socio_cfg = config.get("socioeconomics", {}) or {}
+    scenario_list = list(scenario_labels)
+    if not scenario_list:
+        return None, None
+
+    gdp_series_path = _resolve_path(root, economic_cfg.get("gdp_series"), run_directory)
+    gdp_population_dir = economic_cfg.get("gdp_population_directory")
+    if gdp_population_dir is not None:
+        gdp_population_dir = _resolve_path(root, gdp_population_dir, run_directory)
+    if gdp_population_dir is None:
+        gdp_population_dir = (root / "data" / "GDP_and_Population_data").resolve()
+
+    gdp_map: dict[str, dict[int, float]] = {}
+    pop_map: dict[str, dict[int, float]] = {}
+
+    try:
+        if gdp_series_path and gdp_series_path.exists():
+            frame = pd.read_csv(gdp_series_path)
+            if "year" not in frame.columns or "gdp_trillion_usd" not in frame.columns:
+                raise ValueError(
+                    f"GDP series file {gdp_series_path} missing required columns "
+                    "'year'/'gdp_trillion_usd'"
+                )
+            frame["year"] = frame["year"].astype(int)
+            gdp_base = {
+                int(year): float(value)
+                for year, value in frame.set_index("year")["gdp_trillion_usd"].astype(float).items()
+            }
+            pop_base: dict[int, float] | None = None
+            if "population_million" in frame.columns:
+                pop_base = {
+                    int(year): float(value)
+                    for year, value in frame.set_index("year")["population_million"]
+                    .astype(float)
+                    .items()
+                }
+            for scenario in scenario_list:
+                gdp_map[scenario] = dict(gdp_base)
+                if pop_base is not None:
+                    pop_map[scenario] = dict(pop_base)
+            return gdp_map or None, pop_map or None
+
+        socio_mode = str(socio_cfg.get("mode", "")).strip().lower()
+        if socio_mode == "dice":
+            dice_cfg = socio_cfg.get("dice", {}) or {}
+            for scenario in scenario_list:
+                climate_label = _scenario_climate_label(scenario, climate_labels)
+                gdp_series, population_series = _project_dice_series(
+                    root,
+                    dice_cfg,
+                    climate_label,
+                    plot_end,
+                )
+                if gdp_series:
+                    gdp_map[scenario] = gdp_series
+                if population_series:
+                    pop_map[scenario] = population_series
+            return gdp_map or None, pop_map or None
+
+        for scenario in scenario_list:
+            climate_label = _scenario_climate_label(scenario, climate_labels)
+            family = _infer_ssp_family_from_label(climate_label)
+            gdp_series, population_series = _load_ssp_economic_data(family, gdp_population_dir)
+            gdp_map[scenario] = {
+                int(year): float(value) for year, value in gdp_series.sort_index().items()
+            }
+            if population_series is not None:
+                pop_map[scenario] = {
+                    int(year): float(value)
+                    for year, value in population_series.sort_index().items()
+                }
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Unable to load socioeconomics series: %s", exc)
+        return None, None
+
+    return gdp_map or None, pop_map or None
+
+
+def _project_dice_series(
+    root: Path,
+    dice_cfg: Mapping[str, object],
+    climate_label: str | None,
+    end_year: int,
+) -> tuple[dict[int, float] | None, dict[int, float] | None]:
+    cfg = dict(dice_cfg)
+    scenario_setting = str(cfg.get("scenario", "SSP2")).strip()
+    if scenario_setting.lower() == "as_climate_scenario":
+        resolved = _infer_ssp_family_from_label(climate_label)
+    else:
+        resolved = scenario_setting.upper()
+    cfg["scenario"] = resolved
+    model = DiceSocioeconomics.from_config(cfg, base_path=root)
+    frame = model.project(int(end_year))
+    gdp_series = {
+        int(year): float(value)
+        for year, value in frame.set_index("year")["gdp_trillion_usd"].astype(float).items()
+    }
+    population_series = {
+        int(year): float(value)
+        for year, value in frame.set_index("year")["population_million"].astype(float).items()
+    }
+    return gdp_series, population_series
 
 
 def _read_series(
@@ -535,6 +686,15 @@ def build_summary(
                 temperature_timeseries=temperature_series,
             )
 
+    gdp_series_map, population_series_map = _collect_socio_series(
+        root,
+        config,
+        metrics_map.keys(),
+        climate_labels_str,
+        run_directory,
+        plot_end,
+    )
+
     # Construct summary settings after climate label resolution
     settings = SummarySettings(
         years=years,
@@ -549,6 +709,9 @@ def build_summary(
         run_method=run_method,
         scc_output_directory=scc_output_dir,
         base_year=base_year_value,
+        climate_output_directory=temperature_root,
+        gdp_series=gdp_series_map,
+        population_series=population_series_map,
     )
 
     if not metrics_map:
@@ -1031,3 +1194,74 @@ def write_plots(
     )
 
     _plot_scc_timeseries(settings, methods, metrics_map)
+    _plot_socioeconomic_timeseries(settings)
+    _include_background_plots(settings, output_dir)
+
+
+def _include_background_plots(settings: SummarySettings, plots_dir: Path) -> None:
+    climate_dir = settings.climate_output_directory
+    if climate_dir is None:
+        return
+    for stem in ("background_climate_full", "background_climate_horizon"):
+        source = climate_dir / f"{stem}.png"
+        if not source.exists():
+            continue
+        destination = plots_dir / source.name
+        try:
+            shutil.copyfile(source, destination)
+        except OSError as exc:  # pragma: no cover - filesystem dependent
+            LOGGER.warning("Unable to copy %s into summary plots: %s", source, exc)
+
+
+def _plot_socioeconomic_timeseries(settings: SummarySettings) -> None:
+    if not settings.gdp_series:
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover - optional dependency
+        LOGGER.warning("matplotlib not available; skipping socioeconomics plot")
+        return
+
+    plots_dir = settings.output_directory / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    years = list(range(settings.plot_start, settings.plot_end + 1))
+    if not years:
+        return
+
+    fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+    gdp_series = _collapse_by_climate_label(settings.gdp_series, settings.climate_labels)
+    pop_series = (
+        _collapse_by_climate_label(settings.population_series, settings.climate_labels)
+        if settings.population_series
+        else None
+    )
+
+    scenarios = sorted(gdp_series.keys())
+    for scenario in scenarios:
+        series = gdp_series[scenario]
+        values = [series.get(year, math.nan) for year in years]
+        axes[0].plot(years, values, label=scenario)
+    axes[0].set_ylabel("GDP (trillion USD)")
+    axes[0].set_title("Socioeconomic trajectories")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend(loc="best", fontsize=8)
+
+    if pop_series:
+        for scenario in sorted(pop_series.keys()):
+            series = pop_series.get(scenario)
+            if not series:
+                continue
+            values = [series.get(year, math.nan) for year in years]
+            axes[1].plot(years, values, label=scenario)
+        axes[1].set_ylabel("Population (million)")
+        axes[1].legend(loc="best", fontsize=8)
+    else:
+        axes[1].set_visible(False)
+    axes[-1].set_xlabel("Year")
+    fig.tight_layout()
+    fig.savefig(
+        plots_dir / f"socioeconomics.{settings.plot_format}",
+        format=settings.plot_format,
+    )
+    plt.close(fig)

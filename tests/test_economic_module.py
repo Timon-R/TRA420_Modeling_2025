@@ -153,3 +153,41 @@ def test_from_csv_automatically_loads_ssp_data(tmp_path: Path, monkeypatch: pyte
     np.testing.assert_allclose(inputs.gdp_trillion_usd[[0, -1]], np.array([80.0, 90.0]))
     assert inputs.population_million is not None
     np.testing.assert_allclose(inputs.population_million[[0, -1]], np.array([7000.0, 7100.0]))
+
+
+def test_from_csv_accepts_custom_gdp_frame(tmp_path: Path):
+    temp_path = tmp_path / "temp_custom.csv"
+    emission_path = tmp_path / "emission_custom.csv"
+
+    pd.DataFrame(
+        {
+            "year": [2025, 2026, 2027],
+            "temperature_adjusted": [1.0, 1.05, 1.1],
+            "temperature_baseline": [1.0, 1.04, 1.08],
+        }
+    ).to_csv(temp_path, index=False)
+    pd.DataFrame({"year": [2025, 2026, 2027], "delta": [-1.0, -1.0, -1.0]}).to_csv(
+        emission_path, index=False
+    )
+
+    gdp_frame = pd.DataFrame(
+        {
+            "year": [2025, 2026, 2027],
+            "gdp_trillion_usd": [50.0, 51.0, 52.0],
+            "population_million": [7000.0, 7010.0, 7020.0],
+        }
+    )
+
+    inputs = EconomicInputs.from_csv(
+        {"policy": temp_path},
+        {"policy": emission_path},
+        gdp_path=None,
+        temperature_column="temperature_adjusted",
+        emission_column="delta",
+        emission_to_tonnes=1e6,
+        gdp_frame=gdp_frame,
+    )
+
+    np.testing.assert_allclose(inputs.gdp_trillion_usd[[0, -1]], [50.0, 52.0])
+    assert inputs.population_million is not None
+    np.testing.assert_allclose(inputs.population_million[[0, -1]], [7000.0, 7020.0])

@@ -14,12 +14,32 @@ calc_emissions:
       - scenario_1_upper_bound
     #  - custom_example
 
+socioeconomics:
+  mode: dice
+  dice:
+    start_year: 2019
+    scenario: as_climate_scenario  # Set to 'as_climate_scenario' to mirror the climate scenario's SSP family. Alternative: "SSP2" or others.
+    population:
+      initial_population_million: 7713.47
+      logistic_growth: 0.028
+      asymptote_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv
+    tfp:
+      initial_level_label: nordhaus
+      decline_rate: 0.005
+      scenario_growth_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv
+      initial_levels_table_path: data/GDP_and_Population_data/DICE/dice_tfp_initial_levels.csv
+    capital:
+      depreciation_rate: 0.0369791
+      savings_rate: 0.223
+      capital_output_ratio: 3.41
+      initial_stock_trillions: null
+    capital_share: 0.36507
+
 climate_module:
   output_directory: results/climate  # Directory for climate results (relative to repository root).
   resource_directory: resources/climate  # Copy of temperature outputs used as shared resources across modules.
   sample_years_option: default  # 'default' (5-year steps to 2050, then 10-year) or 'full'.
   emission_timeseries_directory: resources/All_countries  # Folder containing <scenario>/co2.csv (Mt CO₂/yr; output from calc_emissions aggregation).
-
   parameters:
     # Time grid inherits from time_horizon and stretches to cover the SCC damage window.
     # Emission adjustments are held fixed at their terminal value when extrapolating past the reporting horizon.
@@ -27,7 +47,28 @@ climate_module:
     deep_ocean_efficacy: 1.28  # Plausible range 0.5–1.5 (higher slows deep-ocean uptake).
     forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.
     equilibrium_climate_sensitivity: 3.0  # °C per CO₂ doubling; likely range 2.0–5.0.
-
+    warming_reference_start_year: 1850  # Baseline reference window for anomalies.
+    warming_reference_end_year: 1900
+  fair:
+    calibration:
+      enabled: true
+      base_path: data/FaIR_calibration_data/v1.5.0
+      ensemble_file: calibrated_constrained_parameters.csv
+      species_file: species_configs_properties.csv
+      ch4_lifetime_file: CH4_lifetime.csv
+      historical_emissions_file: historical_emissions_1750-2023_cmip7.csv
+      solar_forcing_file: solar_forcing_timebounds.csv
+      volcanic_forcing_file: volcanic_forcing_timebounds.csv
+      landuse_scale_file: landuse_scale_factor.csv
+      landuse_scale_label: historical_best
+      lapsi_scale_file: lapsi_scale_factor.csv
+      lapsi_scale_label: historical_best
+      warming_baselines_file: warming_baselines.csv
+      warming_baseline_label: 941
+      warming_baseline_column: "temperature 2004-2023"
+      ensemble_member_id: 1299
+      co2_species_name: CO2
+      ch4_lifetime_label: historical_best
   climate_scenarios:
     run: all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
     definitions:

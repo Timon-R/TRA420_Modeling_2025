@@ -2,6 +2,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -173,3 +174,46 @@ def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "pv_delta_damage_usd",
     }
     assert set(damage_df["year"].astype(int)) == set(range(2025, 2031))
+
+
+def test_dice_projection_can_follow_climate_scenario(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, str] = {}
+
+    class DummyDice:
+        @classmethod
+        def from_config(cls, cfg, base_path):
+            captured["scenario"] = cfg["scenario"]
+
+            class _Model:
+                def project(self, end_year: int) -> pd.DataFrame:
+                    years = np.arange(2019, end_year + 1)
+                    return pd.DataFrame(
+                        {
+                            "year": years,
+                            "population_million": np.ones_like(years, dtype=float),
+                            "population_persons": np.ones_like(years, dtype=float) * 1e6,
+                            "gdp_trillion_usd": np.ones_like(years, dtype=float),
+                            "gdp_per_capita_usd": np.ones_like(years, dtype=float),
+                        }
+                    )
+
+            return _Model()
+
+    monkeypatch.setattr(run_scc, "DiceSocioeconomics", DummyDice)
+
+    root_cfg = {
+        "socioeconomics": {
+            "mode": "dice",
+            "dice": {
+                "scenario": "as_climate_scenario",
+            },
+        }
+    }
+
+    frame = run_scc._build_socioeconomic_projection(
+        root_cfg,
+        end_year=2020,
+        climate_label="ssp370",
+    )
+    assert captured["scenario"] == "SSP3"
+    assert frame.iloc[-1]["year"] == 2020

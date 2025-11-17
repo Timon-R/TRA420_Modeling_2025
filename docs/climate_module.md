@@ -67,7 +67,10 @@ Under `climate_module`:
   or `full` (every year).
 - `parameters`: global defaults (`start_year`, `end_year`, `timestep`,
   `climate_setup`, and optional overrides such as `deep_ocean_efficacy`,
-  `forcing_4co2`, `equilibrium_climate_sensitivity`).
+  `forcing_4co2`, `equilibrium_climate_sensitivity`, and the anomaly
+  reference window via `warming_reference_start_year` / `_end_year`). Runs now
+  begin in 1750 so calibrated historical drivers are always replayed before
+  branching into SSP pathways.
 - `climate_scenarios`: list of FaIR/RCMIP pathways with per-scenario options:
   - `id`: scenario identifier (e.g., `ssp245`).
   - `label`: output label suffix.
@@ -78,6 +81,47 @@ Under `climate_module`:
     overrides (`ocean_heat_capacity`, etc.).
 - `emission_scenarios`: selects which emission folders to load (each must
   contain `co2.csv` with `year, delta` in Mt CO₂/yr).
+
+### Background climate exports
+
+Every execution writes baseline (reference emission) trajectories to
+`background_climate_full.csv` (1750 up to the extended climate horizon) and
+`background_climate_horizon.csv` (restricted to the configured `time_horizon`).
+The corresponding plots are now emitted directly under
+`results/summary/plots` (mirrored into run directories when configured) so the
+summary module can reference them without extra copying. Temperatures are
+expressed as anomalies relative to the `warming_reference_start/end_year`
+window (default 1850–1900), ensuring the economic module observes the same
+background climate when post-processing SCC results.
+
+### FaIR calibration block
+
+The optional `climate_module.fair.calibration` block activates the IGCC-aligned
+parameter set that ships under `data/FaIR_calibration_data/v1.5.0`. Set
+`enabled: true` and point `base_path` to the folder containing the CSVs. The
+following options customise the run:
+
+- `ensemble_file`, `ensemble_member_id`/`ensemble_member_index`: pick a row from
+  `calibrated_constrained_parameters.csv` (defaults to sample `1299`). This row
+  replaces FaIR’s ocean heat capacities, transfer coefficients, deep-ocean
+  efficacy, forcing scales, F₂×, and CO₂ baseline concentration.
+- `species_file`, `co2_species_name`: select the calibrated carbon-cycle pools
+  (defaults to row `CO2`).
+- `ch4_lifetime_file`, `ch4_lifetime_label`: override CH₄ lifetimes and chemical
+  sensitivities (defaults to the `historical_best` row in `CH4_lifetime.csv`).
+- `historical_emissions_file`, `solar_forcing_file`, `volcanic_forcing_file`:
+  CMIP7 driver tables replayed from 1750 prior to the SSP branch.
+- `landuse_scale_file`/`lapsi_scale_file` and labels: provide scalar tweaks for
+  land-use and LAPSI forcing streams (optional—defaults include the
+  `historical_best` rows).
+- `warming_baselines_file`, `warming_baseline_label`,
+  `warming_baseline_column`: retain metadata on the IGCC baseline/target
+  windows for reporting (no extra computation required in the runner).
+
+All files are consumed directly from disk—no network downloads or `pooch`
+helpers are required. Once configured, every `run_fair_scenarios.py` execution
+uses the calibrated parameters, ensuring the background climate matches the
+historical constraints before adding emission deltas.
 
 ## Outputs
 

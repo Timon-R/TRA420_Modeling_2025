@@ -120,6 +120,8 @@ def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None
 
     for climate_file in sorted(climate_dir.glob("*.csv")):
         frame = pd.read_csv(climate_file)
+        if not {"temperature_baseline", "temperature_adjusted"}.issubset(frame.columns):
+            continue
         scenario_prefix = _detect_scenario_prefix(frame, scenario_prefixes, climate_file.name)
         if scenario_prefix is None:
             continue

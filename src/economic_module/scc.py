@@ -239,6 +239,7 @@ class EconomicInputs:
         emission_to_tonnes: float = 1e6,
         gdp_column: str = "gdp_trillion_usd",
         population_column: str = "population_million",
+        gdp_frame: pd.DataFrame | None = None,
         gdp_population_directory: Path | str | None = None,
     ) -> "EconomicInputs":
         """Load inputs from CSV files.
@@ -246,6 +247,8 @@ class EconomicInputs:
         ``temperature_paths`` and ``emission_paths`` map scenario labels to CSVs
         containing ``year`` and the respective data columns. Emission values are
         scaled by ``emission_to_tonnes`` (default converts Mt CO₂ to t CO₂).
+        ``gdp_frame`` can be provided directly to supply custom GDP/population
+        trajectories without reading from disk.
         """
 
         if not temperature_paths or not emission_paths:
@@ -271,9 +274,13 @@ class EconomicInputs:
             emission_frames[label] = frame.rename(columns={emission_column: "emission_raw"})
 
         climate_scenarios = _extract_climate_scenarios(temp_frames)
+        if not climate_scenarios:
+            climate_scenarios = None
         ssp_family: str | None = None
 
-        if gdp_population_directory is not None:
+        if gdp_frame is not None:
+            gdp_data_frame = gdp_frame.copy()
+        elif gdp_population_directory is not None:
             if not climate_scenarios:
                 raise ValueError(
                     "Temperature CSVs must include 'climate_scenario' to determine "
@@ -292,25 +299,27 @@ class EconomicInputs:
             gdp_series = gdp_series.sort_index()
             if population_series is not None:
                 population_series = _align_series(population_series.sort_index(), gdp_series.index)
-            gdp_frame = pd.DataFrame(
+            gdp_data_frame = pd.DataFrame(
                 {
                     "year": gdp_series.index.astype(int),
                     gdp_column: gdp_series.values,
                 }
             )
             if population_series is not None:
-                gdp_frame[population_column] = population_series.loc[gdp_frame["year"]].to_numpy()
+                gdp_data_frame[population_column] = population_series.loc[
+                    gdp_data_frame["year"]
+                ].to_numpy()
         else:
             if gdp_path is None:
-                raise ValueError("Provide either gdp_path or gdp_population_directory.")
-            gdp_frame = _load_yearly_csv(
+                raise ValueError("Provide either gdp_path, gdp_frame, or gdp_population_directory.")
+            gdp_data_frame = _load_yearly_csv(
                 gdp_path,
                 required_columns={gdp_column},
                 optional_columns={population_column},
             )
 
         year_bounds: list[tuple[int, int]] = []
-        gdp_years = gdp_frame["year"].astype(int)
+        gdp_years = gdp_data_frame["year"].astype(int)
         year_bounds.append((int(gdp_years.min()), int(gdp_years.max())))
         for frame in temp_frames.values():
             series_years = frame["year"].astype(int)
@@ -341,10 +350,10 @@ class EconomicInputs:
                 series = series * scale
             return series.to_numpy(dtype=float)
 
-        gdp_series = _reindex_series(gdp_frame, gdp_column)
+        gdp_series = _reindex_series(gdp_data_frame, gdp_column)
         population = None
-        if population_column in gdp_frame:
-            population = _reindex_series(gdp_frame, population_column)
+        if population_column in gdp_data_frame:
+            population = _reindex_series(gdp_data_frame, population_column)
 
         temperature_series = {
             label: _reindex_series(frame, "temperature_c") for label, frame in temp_frames.items()
@@ -419,7 +428,8 @@ def _load_yearly_csv(
         missing_list = ", ".join(sorted(missing))
         raise ValueError(f"'{path}' is missing required columns: {missing_list}.")
 
-    keep_columns = ["year", *sorted(required_columns.union(optional_columns))]
+    available_optionals = [col for col in optional_columns if col in df.columns]
+    keep_columns = ["year", *sorted(required_columns), *sorted(available_optionals)]
     df = df[keep_columns].copy()
     df["year"] = df["year"].astype(int)
     return df

@@ -4,6 +4,9 @@ import pandas as pd
 import pytest
 
 from results_summary import (
+    SummarySettings,
+    _include_background_plots,
+    _plot_socioeconomic_timeseries,
     build_summary,
     write_summary_json,
     write_summary_text,
@@ -192,3 +195,46 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     assert "      2030: 50.00" in text_py
     assert "  Damages (Billion USD, PV 2025):" in text_py
     assert "      2050: -0.90" in text_py
+
+
+def test_include_background_plots_copies_files(tmp_path: Path):
+    climate_dir = tmp_path / "resources" / "climate"
+    plots_dir = tmp_path / "summary" / "plots"
+    climate_dir.mkdir(parents=True)
+    plots_dir.mkdir(parents=True)
+
+    for stem in ("background_climate_full", "background_climate_horizon"):
+        (climate_dir / f"{stem}.png").write_bytes(b"fake")
+
+    settings = SummarySettings(
+        years=[2030],
+        output_directory=tmp_path / "summary",
+        climate_output_directory=climate_dir,
+    )
+
+    _include_background_plots(settings, plots_dir)
+
+    for stem in ("background_climate_full", "background_climate_horizon"):
+        assert (plots_dir / f"{stem}.png").exists()
+
+
+def test_plot_socioeconomics(tmp_path: Path):
+    plots_dir = tmp_path / "plots"
+    settings = SummarySettings(
+        years=[2030, 2040],
+        output_directory=tmp_path,
+        gdp_series={
+            "policy_ssp245": {2030: 100.0, 2040: 120.0},
+            "policy_ssp370": {2030: 105.0, 2040: 125.0},
+        },
+        population_series={
+            "policy_ssp245": {2030: 7000.0, 2040: 7100.0},
+            "policy_ssp370": {2030: 7100.0, 2040: 7200.0},
+        },
+        plot_start=2030,
+        plot_end=2040,
+        plot_format="png",
+        climate_labels=["ssp245", "ssp370"],
+    )
+    _plot_socioeconomic_timeseries(settings)
+    assert (plots_dir / "socioeconomics.png").exists()

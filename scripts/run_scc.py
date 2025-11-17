@@ -36,6 +36,7 @@ The script loads GDP, temperature, and emission difference series, feeds them in
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence, cast
 
@@ -45,6 +46,7 @@ import yaml
 
 from config_paths import apply_results_run_directory, get_results_run_directory
 from economic_module import EconomicInputs, SCCAggregation, compute_scc
+from economic_module.socioeconomics import DiceSocioeconomics
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -79,6 +81,50 @@ def _resolve_path(path_like: str | Path, *, apply_run_directory: bool = True) ->
             repo_root=ROOT,
         )
     return absolute
+
+
+def _max_required_year(time_cfg: Mapping[str, object], economic_cfg: Mapping[str, object]) -> int:
+    start = int(time_cfg.get("start", economic_cfg.get("base_year", 2025)))
+    end_candidates: list[int] = [int(time_cfg.get("end", start))]
+    damage_duration = economic_cfg.get("damage_duration_years")
+    if isinstance(damage_duration, (int, float)):
+        end_candidates.append(start + int(damage_duration) - 1)
+    agg_cfg = economic_cfg.get("aggregation_horizon", {}) or {}
+    agg_end = agg_cfg.get("end")
+    if agg_end is not None:
+        end_candidates.append(int(agg_end))
+    return max(end_candidates)
+
+
+def _build_socioeconomic_projection(
+    root_cfg: Mapping[str, object],
+    *,
+    end_year: int,
+    climate_label: str | None,
+) -> pd.DataFrame | None:
+    socio_cfg = root_cfg.get("socioeconomics", {}) or {}
+    mode = str(socio_cfg.get("mode", "")).strip().lower()
+    if mode != "dice":
+        return None
+    dice_cfg = dict(socio_cfg.get("dice", {}) or {})
+    scenario_setting = str(dice_cfg.get("scenario", "SSP2")).strip()
+    if scenario_setting.lower() == "as_climate_scenario":
+        if not climate_label:
+            raise ValueError(
+                "socioeconomics.dice.scenario='as_climate_scenario' "
+                "requires a climate scenario context."
+            )
+        match = re.match(r"ssp\s*([0-9])", climate_label, re.IGNORECASE)
+        if not match:
+            raise ValueError(
+                "Unable to infer SSP family from climate scenario '" + str(climate_label) + "'."
+            )
+        resolved = f"SSP{match.group(1)}"
+    else:
+        resolved = scenario_setting.upper()
+    dice_cfg["scenario"] = resolved
+    model = DiceSocioeconomics.from_config(dice_cfg, base_path=ROOT)
+    return model.project(end_year)
 
 
 def _load_config() -> dict:
@@ -678,6 +724,16 @@ def main() -> None:
             f"(currently {args.base_year} vs {horizon_start})."
         )
 
+    required_year = _max_required_year(time_horizon_cfg, config)
+    gdp_path = _resolve_path(args.gdp_csv) if args.gdp_csv else None
+    socio_cfg = root_cfg.get("socioeconomics", {}) or {}
+    socio_mode = str(socio_cfg.get("mode", "")).strip().lower()
+    use_socioeconomics = gdp_path is None and socio_mode == "dice"
+    gdp_population_directory = None
+    if gdp_path is None and not use_socioeconomics and args.gdp_population_directory:
+        gdp_population_directory = _resolve_path(args.gdp_population_directory)
+    socio_cache: dict[str, pd.DataFrame | None] = {}
+
     try:
         manual_temperature = _collect_sources(
             args.temperature, config.get("temperature_series"), minimum=0, label="temperature"
@@ -716,6 +772,7 @@ def main() -> None:
                 "temperature": temperature_sources,
                 "emission": emission_sources,
                 "ref_map": dict(reference_lookup),
+                "climate_label": None,
             }
         )
     else:
@@ -847,16 +904,12 @@ def main() -> None:
                     "temperature": temp_subset,
                     "emission": emission_subset,
                     "ref_map": ref_map,
+                    "climate_label": climate_label,
                 }
             )
 
     if not scenario_groups:
         parser.error("No target scenarios selected for evaluation.")
-
-    gdp_path = _resolve_path(args.gdp_csv) if args.gdp_csv else None
-    gdp_population_directory = (
-        _resolve_path(args.gdp_population_directory) if args.gdp_population_directory else None
-    )
 
     output_dir = _resolve_path(args.output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -898,6 +951,21 @@ def main() -> None:
         reference_label = cast(str, group["reference"])
         targets = cast(list[str], group["targets"])
         ref_map = cast(dict[str, str], group["ref_map"])
+        climate_label = cast(str | None, group.get("climate_label"))
+
+        gdp_frame_override: pd.DataFrame | None = None
+        if use_socioeconomics:
+            cache_key = climate_label or "__default__"
+            if cache_key not in socio_cache:
+                try:
+                    socio_cache[cache_key] = _build_socioeconomic_projection(
+                        root_cfg,
+                        end_year=required_year,
+                        climate_label=climate_label,
+                    )
+                except (FileNotFoundError, ValueError) as exc:
+                    parser.error(str(exc))
+            gdp_frame_override = socio_cache.get(cache_key)
 
         inputs = EconomicInputs.from_csv(
             temp_subset,
@@ -906,6 +974,7 @@ def main() -> None:
             temperature_column=args.temperature_column,
             emission_column=args.emission_column,
             emission_to_tonnes=args.emission_unit_multiplier,
+            gdp_frame=gdp_frame_override,
             gdp_population_directory=gdp_population_directory,
         )
 
