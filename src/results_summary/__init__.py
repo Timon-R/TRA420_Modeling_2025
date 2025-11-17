@@ -49,6 +49,7 @@ class ScenarioMetrics:
     mortality_delta: dict[int, float] = field(default_factory=dict)
     mortality_percent: dict[int, float] = field(default_factory=dict)
     mortality_baseline: dict[int, float] = field(default_factory=dict)
+    mortality_value_delta: dict[int, float] | None = None
     scc_usd_per_tco2: dict[str, dict[int, float]] = field(default_factory=dict)
     damages_usd: dict[str, dict[int, float]] = field(default_factory=dict)
     scc_average: dict[str, float] = field(default_factory=dict)
@@ -415,7 +416,7 @@ def _load_temperature_series(path: Path) -> dict[int, float] | None:
 
 def _read_mortality(
     path: Path, years: Iterable[int]
-) -> tuple[dict[int, float], dict[int, float], dict[int, float]]:
+) -> tuple[dict[int, float], dict[int, float], dict[int, float], dict[int, float] | None]:
     if not path.exists():
         LOGGER.debug("Mortality summary missing: %s", path)
         nan_map = {year: math.nan for year in years}
@@ -427,19 +428,26 @@ def _read_mortality(
         "percent_change_mortality",
         "baseline_deaths_per_year",
     }
+    value_col = frame.columns.intersection(["delta_value_usd"])
     if not expected.issubset(frame.columns):
         LOGGER.warning("Mortality file %s missing required columns", path)
         nan_map = {year: math.nan for year in years}
-        return nan_map, nan_map.copy(), nan_map.copy()
+        return nan_map, nan_map.copy(), nan_map.copy(), None
     frame["year"] = frame["year"].astype(int)
     frame = frame.set_index("year")
     delta = frame["delta_deaths_per_year"].astype(float)
     percent = frame["percent_change_mortality"].astype(float)
     baseline = frame["baseline_deaths_per_year"].astype(float)
+    value_series = frame[value_col[0]].astype(float) if len(value_col) else None
     return (
         {int(year): float(delta.get(int(year), np.nan)) for year in years},
         {int(year): float(percent.get(int(year), np.nan)) for year in years},
         {int(year): float(baseline.get(int(year), np.nan)) for year in years},
+        (
+            {int(year): float(value_series.get(int(year), np.nan)) for year in years}
+            if value_series is not None
+            else None
+        ),
     )
 
 
@@ -635,9 +643,12 @@ def build_summary(
             emission_series_dict = emission_series
 
         mortality_path = (air_output_dir / scenario / "total_mortality_summary.csv").resolve()
-        mortality_delta, mortality_percent, mortality_baseline = _read_mortality(
-            mortality_path, years
-        )
+        (
+            mortality_delta,
+            mortality_percent,
+            mortality_baseline,
+            mortality_value_delta,
+        ) = _read_mortality(mortality_path, years)
 
         for climate_label in climate_labels:
             scenario_label = f"{scenario}_{climate_label}" if climate_label else scenario
@@ -678,6 +689,7 @@ def build_summary(
                 mortality_delta=mortality_delta,
                 mortality_percent=mortality_percent,
                 mortality_baseline=mortality_baseline,
+                mortality_value_delta=mortality_value_delta,
                 scc_usd_per_tco2=scc_values_copy,
                 damages_usd=damages_adjusted,
                 scc_average=scc_average,
@@ -743,6 +755,7 @@ def write_summary_json(
             "mortality_delta": metrics.mortality_delta,
             "mortality_percent": metrics.mortality_percent,
             "mortality_baseline": metrics.mortality_baseline,
+            "mortality_value_delta": metrics.mortality_value_delta,
             "scc_usd_per_tco2": metrics.scc_usd_per_tco2,
             "damages_usd": metrics.damages_usd,
             "scc_average": metrics.scc_average,
@@ -802,6 +815,12 @@ def write_summary_text(
         for year in settings.years:
             value = metrics.mortality_delta.get(year, math.nan)
             lines.append(f"    {year}: {_format_value(value, precision=1)}")
+        if metrics.mortality_value_delta:
+            lines.append("  Mortality value (USD/year):")
+            for year in settings.years:
+                series = metrics.mortality_value_delta or {}
+                value = series.get(year, math.nan)
+                lines.append(f"    {year}: {_format_value(value, precision=0)}")
 
         if settings.aggregation_mode == "average":
             horizon_text = ""
@@ -1131,6 +1150,37 @@ def write_plots(
         file_suffix="mortality_percent",
         plot_format=settings.plot_format,
     )
+
+    # Mortality value (USD/year)
+    mortality_value_data = {
+        scenario: values
+        for scenario, values in _pivot_metric(metrics_map, "mortality_value_delta").items()
+        if values
+    }
+    if mortality_value_data:
+        if settings.climate_labels:
+            collapsed_value: dict[str, Mapping[int, float]] = {}
+            for scenario in sorted(mortality_value_data.keys()):
+                base, _ = _split_climate_suffix(scenario, settings.climate_labels)
+                if base not in collapsed_value:
+                    collapsed_value[base] = mortality_value_data[scenario]
+            mortality_value_data = collapsed_value
+        mortality_value_scaled = {
+            scenario: {
+                year: value / 1e9 if not math.isnan(value) else value
+                for year, value in series.items()
+            }
+            for scenario, series in mortality_value_data.items()
+        }
+        _plot_grouped_bars(
+            mortality_value_scaled,
+            years,
+            title="Mortality Value (Billion USD/year)",
+            ylabel="Billion USD/year",
+            output_path=output_dir,
+            file_suffix="mortality_value",
+            plot_format=settings.plot_format,
+        )
 
     for method in methods:
         damages_data = _pivot_metric(metrics_map, "damages_usd", method)

@@ -4,3 +4,5 @@ improve documentation for kernel method in economic module (remove that method a
 Upper and lower bound as config intervall, use average
 
 Pattern scaling per region (Western Balkans)
+
+Note that the air pollution only works in the western balkans. For European or Global scenarios this would need to be handled.

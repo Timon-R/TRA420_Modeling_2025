@@ -128,6 +128,10 @@ def test_build_summary_collects_metrics(tmp_path: Path):
                 "baseline_deaths_per_year": 1000,
                 "delta_deaths_per_year": -20,
                 "new_deaths_per_year": 980,
+                "value_of_statistical_life_usd": 1_000_000,
+                "baseline_value_usd": 1_000_000_000,
+                "delta_value_usd": -20_000_000,
+                "new_value_usd": 980_000_000,
             },
             {
                 "year": 2050,
@@ -135,6 +139,10 @@ def test_build_summary_collects_metrics(tmp_path: Path):
                 "baseline_deaths_per_year": 1000,
                 "delta_deaths_per_year": -30,
                 "new_deaths_per_year": 970,
+                "value_of_statistical_life_usd": 1_000_000,
+                "baseline_value_usd": 1_000_000_000,
+                "delta_value_usd": -30_000_000,
+                "new_value_usd": 970_000_000,
             },
         ],
     )
@@ -158,6 +166,8 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     assert policy_metrics.damages_usd["ramsey_discount"][2030] == pytest.approx(-5.0e8)
     assert policy_metrics.damages_usd["ramsey_discount"][2050] == pytest.approx(-9.0e8)
     assert policy_metrics.mortality_delta[2050] == -30
+    assert policy_metrics.mortality_value_delta is not None
+    assert policy_metrics.mortality_value_delta[2030] == -20_000_000
     assert policy_metrics.scc_average["ramsey_discount"] == 50.0
     assert policy_metrics.damage_total_usd["ramsey_discount"] == pytest.approx(-12.5e9)
     assert "baseline_ssp245" not in metrics_map
@@ -171,6 +181,7 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     assert "Scenario: policy_ssp245" in content
     assert "SCC average (2025-2050):" in content
     assert "  Damages (Billion USD, PV 2025):" in content
+    assert "  Mortality value (USD/year):" in content
     assert "      2030: -0.50" in content
 
     summary_json = write_summary_json(
@@ -195,6 +206,7 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     assert "      2030: 50.00" in text_py
     assert "  Damages (Billion USD, PV 2025):" in text_py
     assert "      2050: -0.90" in text_py
+    assert "  Mortality value (USD/year):" in text_py
 
 
 def test_include_background_plots_copies_files(tmp_path: Path):

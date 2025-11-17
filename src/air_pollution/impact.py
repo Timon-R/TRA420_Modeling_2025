@@ -53,6 +53,7 @@ class PollutantImpact:
     weighted_percent_change: pd.Series
     baseline_deaths_per_year: float | None = None
     deaths_summary: pd.DataFrame | None = None
+    baseline_deaths_by_country: pd.Series | None = None
 
 
 @dataclass
@@ -112,6 +113,8 @@ def run_from_config(
     module_country_weights_cfg = module_cfg.get("country_weights")
     module_baseline_cfg = module_cfg.get("baseline_deaths")
     module_baseline_deaths = _parse_baseline_deaths(module_baseline_cfg)
+    module_vsl_cfg = module_cfg.get("value_of_statistical_life_usd")
+    module_vsl_value = float(module_vsl_cfg) if module_vsl_cfg is not None else None
     module_weights_cfg = (
         module_baseline_cfg.get("weights") if isinstance(module_baseline_cfg, Mapping) else None
     )
@@ -144,7 +147,7 @@ def run_from_config(
                 continue
 
             cfg = pollutant_cfg.get(pollutant, {})
-            concentrations = _load_concentrations(
+            concentrations, baseline_deaths_by_country = _load_concentrations(
                 config_path.parent,
                 cfg.get("stats_file", DEFAULT_POLLUTANT_FILES.get(pollutant)),
                 cfg.get("concentration_measure", default_measure),
@@ -160,6 +163,12 @@ def run_from_config(
                 module_country_weights_cfg,
                 cfg.get("country_weights"),
             )
+            if baseline_deaths_by_country is not None and not baseline_deaths_by_country.empty:
+                normalized = _weights_from_baseline(
+                    baseline_deaths_by_country, concentrations.index
+                )
+                if normalized is not None:
+                    country_weights = normalized
 
             beta = _derive_beta(cfg, pollutant)
             emission_ratio = _compute_emission_ratio(scenario_series, baseline_series)
@@ -171,9 +180,15 @@ def run_from_config(
             weighted_percent_change = _weighted_percent_change(impacts, country_weights)
 
             baseline_deaths = _parse_baseline_deaths(cfg.get("baseline_deaths"))
+            if baseline_deaths is None and baseline_deaths_by_country is not None:
+                baseline_deaths = float(baseline_deaths_by_country.sum())
             deaths_summary = None
             if baseline_deaths is not None:
-                deaths_summary = _build_death_summary(weighted_percent_change, baseline_deaths)
+                deaths_summary = _build_death_summary(
+                    weighted_percent_change,
+                    baseline_deaths,
+                    value_of_statistical_life=module_vsl_value,
+                )
                 if deaths_summary.empty:
                     deaths_summary = None
 
@@ -188,6 +203,7 @@ def run_from_config(
                 weighted_percent_change=weighted_percent_change,
                 baseline_deaths_per_year=baseline_deaths,
                 deaths_summary=deaths_summary,
+                baseline_deaths_by_country=baseline_deaths_by_country,
             )
 
             _write_output(output_dir, scenario_name, pollutant, impacts)
@@ -195,11 +211,24 @@ def run_from_config(
                 _write_mortality_summary(output_dir, scenario_name, pollutant, deaths_summary)
 
         if pollutant_results:
-            total_summary = _build_total_mortality_summary(
-                pollutant_results, module_baseline_deaths, module_weights_cfg
-            )
-            if total_summary is not None:
-                _write_total_mortality_summary(output_dir, scenario_name, total_summary)
+            baseline_for_total = module_baseline_deaths
+            if baseline_for_total is None:
+                derived = sum(
+                    impact.baseline_deaths_per_year or 0.0 for impact in pollutant_results.values()
+                )
+                if derived > 0.0:
+                    baseline_for_total = float(derived)
+                    module_baseline_deaths = baseline_for_total
+            total_summary = None
+            if baseline_for_total is not None:
+                total_summary = _build_total_mortality_summary(
+                    pollutant_results,
+                    baseline_for_total,
+                    module_weights_cfg,
+                    module_vsl_value,
+                )
+                if total_summary is not None:
+                    _write_total_mortality_summary(output_dir, scenario_name, total_summary)
             results[scenario_name] = AirPollutionResult(
                 scenario=scenario_name,
                 pollutant_results=pollutant_results,
@@ -238,7 +267,7 @@ def _load_concentrations(
     preferred_measure: str,
     fallback_measures: Iterable[str],
     countries_filter: Iterable[str] | None,
-) -> pd.Series:
+) -> tuple[pd.Series, pd.Series | None]:
     if not stats_path:
         return pd.Series(dtype=float)
 
@@ -268,12 +297,18 @@ def _load_concentrations(
         )
 
     series = df.set_index("country")[chosen_col].astype(float)
+    baseline_deaths = None
+    if "baseline_deaths_per_year" in df.columns:
+        baseline_series = df.set_index("country")["baseline_deaths_per_year"].astype(float)
+        baseline_deaths = baseline_series
     if countries_filter:
         countries = [c for c in countries_filter if c in series.index]
         series = series.loc[countries]
 
     series = series.dropna()
-    return series
+    if baseline_deaths is not None:
+        baseline_deaths = baseline_deaths.reindex(series.index).dropna()
+    return series, baseline_deaths
 
 
 def _derive_beta(cfg: Mapping[str, object], pollutant: str) -> float:
@@ -405,6 +440,18 @@ def _resolve_weights(
     return weights / total
 
 
+def _weights_from_baseline(
+    baseline_series: pd.Series, countries: Iterable[str]
+) -> pd.Series | None:
+    filtered = baseline_series.reindex(list(countries)).dropna()
+    if filtered.empty:
+        return None
+    total = filtered.sum()
+    if not math.isfinite(total) or total <= 0.0:
+        return None
+    return (filtered / total).astype(float)
+
+
 def _compute_emission_ratio(
     scenario_series: pd.Series,
     baseline_series: pd.Series,
@@ -501,7 +548,10 @@ def _weighted_percent_change(impacts: pd.DataFrame, weights: pd.Series) -> pd.Se
 
 
 def _build_death_summary(
-    percent_change: pd.Series, baseline_deaths_per_year: float
+    percent_change: pd.Series,
+    baseline_deaths_per_year: float,
+    *,
+    value_of_statistical_life: float | None = None,
 ) -> pd.DataFrame:
     if percent_change.empty:
         return pd.DataFrame()
@@ -514,6 +564,12 @@ def _build_death_summary(
     df["baseline_deaths_per_year"] = baseline_deaths_per_year
     df["delta_deaths_per_year"] = df["baseline_deaths_per_year"] * df["percent_change_mortality"]
     df["new_deaths_per_year"] = df["baseline_deaths_per_year"] + df["delta_deaths_per_year"]
+    if value_of_statistical_life is not None:
+        vsl = float(value_of_statistical_life)
+        df["value_of_statistical_life_usd"] = vsl
+        df["baseline_value_usd"] = df["baseline_deaths_per_year"] * vsl
+        df["delta_value_usd"] = df["delta_deaths_per_year"] * vsl
+        df["new_value_usd"] = df["new_deaths_per_year"] * vsl
     df.reset_index(inplace=True)
     return df
 
@@ -522,6 +578,7 @@ def _build_total_mortality_summary(
     pollutant_results: Mapping[str, PollutantImpact],
     baseline_deaths_per_year: float | None,
     weights_cfg: Mapping[str, object] | str | None,
+    value_of_statistical_life: float | None,
 ) -> pd.DataFrame | None:
     if baseline_deaths_per_year is None:
         return None
@@ -547,15 +604,20 @@ def _build_total_mortality_summary(
         values = row[weights.index].to_numpy(dtype=float, copy=True)
         percent_change = float(np.dot(values, weights.to_numpy(dtype=float, copy=True)))
         delta = baseline_deaths_per_year * percent_change
-        rows.append(
-            {
-                "year": int(year),
-                "percent_change_mortality": percent_change,
-                "baseline_deaths_per_year": baseline_deaths_per_year,
-                "delta_deaths_per_year": delta,
-                "new_deaths_per_year": baseline_deaths_per_year + delta,
-            }
-        )
+        entry = {
+            "year": int(year),
+            "percent_change_mortality": percent_change,
+            "baseline_deaths_per_year": baseline_deaths_per_year,
+            "delta_deaths_per_year": delta,
+            "new_deaths_per_year": baseline_deaths_per_year + delta,
+        }
+        if value_of_statistical_life is not None:
+            vsl = float(value_of_statistical_life)
+            entry["value_of_statistical_life_usd"] = vsl
+            entry["baseline_value_usd"] = baseline_deaths_per_year * vsl
+            entry["delta_value_usd"] = delta * vsl
+            entry["new_value_usd"] = entry["new_deaths_per_year"] * vsl
+        rows.append(entry)
 
     if not rows:
         return None

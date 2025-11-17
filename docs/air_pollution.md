@@ -11,7 +11,9 @@ changes and applying concentration–response functions.
    `calc_emissions.run_from_config`.
 2. **Read concentration statistics** – Country-level baseline concentration
    summaries (mean/median/min/max) are loaded from CSV files in
-   `data/air_pollution/`.
+   `data/air_pollution/`. Default files now ship with electricity-attributable
+   concentrations and baseline deaths for the Western Balkans, already scaled
+   to reflect that only ~7% of pollution mortality stems from electricity.
 3. **Scale concentrations with emission ratios** – Concentration changes are
    assumed proportional to the ratio of scenario emissions to baseline
    emissions for each pollutant.
@@ -32,9 +34,10 @@ audit, reproduce, and sensitivity‑test.
 
 ## Data Requirements
 
-Provide one CSV per pollutant with country concentration statistics:
-
-- Required columns: `country` and at least one of `mean`, `median`, `min`, `max`.
+- Provide one CSV per pollutant with country concentration statistics:
+  - Required columns: `country` and at least one of `mean`, `median`, `min`, `max`.
+  - Optional column: `baseline_deaths_per_year` (when present the module uses
+    it both to weight countries and to convert percentage changes to deaths).
 - Units: concentrations in µg/m³.
 - Example (wide format):
 
@@ -113,26 +116,24 @@ air_pollution:
     - max
   country_weights: equal              # Normalised weights per country; override with {Country: weight}
   scenarios: all                      # Scenario names from calc_emissions (or explicit list)
+  value_of_statistical_life_usd: 3750000        # Optional VSL (USD per life) for monetising deaths
   pollutants:
     pm25:
-      stats_file: data/air_pollution/PM25_country_stats.csv
+      stats_file: data/air_pollution/PM25_electricity_stats.csv
       relative_risk: 1.08             # RR for the reference concentration delta
       reference_delta: 10.0           # µg/m³ corresponding to the RR value
       # country_weights: {...}        # Optional per-pollutant weighting override
       # baseline_deaths:
       #   per_year: 6000              # Optional pollutant-specific baseline deaths
     nox:
-      stats_file: data/air_pollution/NOx_country_stats.csv
+      stats_file: data/air_pollution/NOx_electricity_stats.csv
       relative_risk: 1.03
       reference_delta: 10.0
-  baseline_deaths:
-    total: 19000                      # Combined baseline deaths (e.g., multi-year total)
-    span:
-      start: 2018
-      end: 2020
-    # weights:                        # Optional pollutant weights for combined summary
-    #   pm25: 0.7
-    #   nox: 0.3
+  # baseline_deaths:                  # Optional; if omitted the module sums the pollutant baselines
+  #   per_year: 2167
+  #   weights:
+  #     pm25: 0.9
+  #     nox: 0.1
 ```
 
 ### Configuration Notes
@@ -269,3 +270,7 @@ The `AirPollutionResult` object also exposes:
 - Outputs are monotone in the emission ratio under the log‑linear model; sanity
   check sign and magnitude by inspecting `*_health_impact.csv` and the aggregate
   summaries.
+- **Monetised impact**  
+  When `value_of_statistical_life_usd` is configured, deaths are multiplied by
+  the provided VSL, producing `delta_value_usd` columns in the per-pollutant and
+  total mortality summaries.
