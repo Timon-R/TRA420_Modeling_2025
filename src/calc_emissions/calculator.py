@@ -99,13 +99,15 @@ class EmissionScenarioResult:
 
 
 def run_from_config(
-    config_path: Path | str = "config.yaml",
+    config_path: Path | str | None = None,
     *,
     default_years: Mapping[str, float | int] | None = None,
     results_run_directory: str | None = None,
 ) -> dict[str, EmissionScenarioResult]:
     """Run emission calculations based on ``config.yaml`` and write delta CSVs."""
-    config_path = Path(config_path)
+    from config_paths import get_config_path  # local import to avoid cycle
+
+    config_path = Path(config_path) if config_path is not None else get_config_path()
     with config_path.open() as handle:
         config = yaml.safe_load(handle) or {}
 

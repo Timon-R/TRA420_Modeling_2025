@@ -95,6 +95,18 @@ Typical workflow (driven by `config.yaml`):
 5. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
 6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles key indicators and plots. Emission and mortality plots collapse SSP suffixes (identical across climate pathways), while SCC and temperature remain pathway-specific. The summary plot folder now also mirrors the background climate graphics and adds a `socioeconomics.png` panel showing the GDP/population trajectories used in the SCC calculations.
 
+### Named runs & scenario suites
+
+- Set `run.output_subdir` in `config.yaml` (or pass `--run-subdir <name>` to
+  `scripts/run_full_pipeline.py`) to keep outputs under `results/<name>/…`.
+- For batch experiments set `run.mode: scenarios` and point
+  `run.scenario_file` to a YAML mapping scenario names to overrides. Each entry
+  can tweak any part of the base config; the pipeline deep-merges the overrides,
+  forces `run.mode` back to `normal`, assigns a per-scenario subdirectory
+  (`results/<suite>/<scenario>/…`), and runs the full workflow. After the suite
+  finishes an aggregate CSV/JSON plus a copy of the scenario YAML are written to
+  `results/<suite>/` for provenance.
+
 ## Socioeconomics & FaIR calibration
 
 - The new `socioeconomics` block in `config.yaml` (default mode `dice`) replaces the old SSP lookup with a DICE-style projection. Population follows logistic growth using scenario-specific asymptotes, total factor productivity declines gradually, and capital evolves via DICE’s savings/depreciation rules. These trajectories feed directly into `run_scc.py` without relying on external GDP/POP workbooks.

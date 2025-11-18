@@ -7,7 +7,6 @@ from pathlib import Path
 
 from config_paths import apply_results_run_directory, get_results_run_directory
 from pattern_scaling import (
-    DEFAULT_CONFIG_PATH,
     DEFAULT_ROOT,
     get_scaling_factors,
     load_config,
@@ -18,8 +17,8 @@ LOGGER = logging.getLogger("pattern_scaling.run")
 
 
 def main() -> None:
-    LOGGER.info("Loading pattern-scaling configuration from %s", DEFAULT_CONFIG_PATH)
-    config = load_config(DEFAULT_CONFIG_PATH)
+    LOGGER.info("Loading pattern-scaling configuration")
+    config = load_config()
     ps_cfg = config.get("pattern_scaling", {})
     run_directory = get_results_run_directory(config)
     countries = ps_cfg.get("countries", [])

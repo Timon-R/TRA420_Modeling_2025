@@ -1,0 +1,9 @@
+default_calibration: {}  # No additional overrides – serves as reference run within the suite.
+
+philosopher_discount:
+  economic_module:
+    methods:
+      run: ramsey_discount
+      ramsey_discount:
+        rho: 0.0075
+        eta: 1

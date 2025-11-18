@@ -44,7 +44,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from config_paths import apply_results_run_directory, get_results_run_directory
+from config_paths import (
+    apply_results_run_directory,
+    get_config_path,
+    get_results_run_directory,
+)
 from economic_module import EconomicInputs, SCCAggregation, compute_scc
 from economic_module.socioeconomics import DiceSocioeconomics
 
@@ -128,7 +132,7 @@ def _build_socioeconomic_projection(
 
 
 def _load_config() -> dict:
-    path = ROOT / "config.yaml"
+    path = get_config_path(ROOT / "config.yaml")
     if not path.exists():
         return {}
     with path.open() as handle:

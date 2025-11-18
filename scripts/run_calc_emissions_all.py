@@ -31,7 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from calc_emissions import EmissionScenarioResult, run_from_config  # noqa: E402
-from config_paths import apply_results_run_directory, get_results_run_directory  # noqa: E402
+from config_paths import (  # noqa: E402
+    apply_results_run_directory,
+    get_config_path,
+    get_results_run_directory,
+)
 
 LOGGER = logging.getLogger("calc_emissions.aggregate")
 
@@ -50,7 +54,7 @@ def _load_country_settings() -> (
         str | None,
     ]
 ):
-    config_path = ROOT / "config.yaml"
+    config_path = get_config_path(ROOT / "config.yaml")
     config = {}
     if config_path.exists():
         with config_path.open() as handle:

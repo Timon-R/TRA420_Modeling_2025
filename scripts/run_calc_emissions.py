@@ -21,13 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from calc_emissions import run_from_config  # noqa: E402
-from config_paths import get_results_run_directory  # noqa: E402
+from config_paths import get_config_path, get_results_run_directory  # noqa: E402
 
 LOGGER = logging.getLogger("calc_emissions.run")
 
 
 def _load_country_settings() -> tuple[Path, str, dict | None, str | None]:
-    config_path = ROOT / "config.yaml"
+    config_path = get_config_path(ROOT / "config.yaml")
     config = {}
     if config_path.exists():
         with config_path.open() as handle:

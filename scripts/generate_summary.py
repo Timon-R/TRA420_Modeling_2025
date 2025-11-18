@@ -11,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from config_paths import get_config_path  # noqa: E402
 from results_summary import (  # noqa: E402
     build_summary,
     write_plots,
@@ -20,7 +21,7 @@ from results_summary import (  # noqa: E402
 
 
 def _load_config() -> dict:
-    path = ROOT / "config.yaml"
+    path = get_config_path(ROOT / "config.yaml")
     if not path.exists():
         raise FileNotFoundError("config.yaml not found at repository root.")
     with path.open() as handle:

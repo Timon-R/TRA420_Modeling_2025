@@ -59,14 +59,18 @@ import yaml
 
 from climate_module import DEFAULT_TIME_CONFIG, ScenarioSpec, run_scenarios, step_change
 from climate_module.calibration import FairCalibration, load_fair_calibration
-from config_paths import apply_results_run_directory, get_results_run_directory
+from config_paths import (
+    apply_results_run_directory,
+    get_config_path,
+    get_results_run_directory,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("climate.run")
 
 
 def _load_config() -> dict:
-    path = ROOT / "config.yaml"
+    path = get_config_path(ROOT / "config.yaml")
     if not path.exists():
         return {}
     with path.open() as handle:

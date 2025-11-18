@@ -25,7 +25,12 @@ import pandas as pd
 import yaml
 
 from calc_emissions.calculator import EmissionScenarioResult, run_from_config as run_emissions
-from config_paths import apply_results_run_directory, get_results_run_directory
+from config_paths import (
+    apply_results_run_directory,
+    get_config_path,
+    get_config_root,
+    get_results_run_directory,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -66,7 +71,7 @@ class AirPollutionResult:
 
 
 def run_from_config(
-    config_path: Path | str = "config.yaml",
+    config_path: Path | str | None = None,
     emission_results: Mapping[str, EmissionScenarioResult] | None = None,
 ) -> dict[str, AirPollutionResult]:
     """Run air-pollution health calculations defined in ``config.yaml``.
@@ -85,9 +90,11 @@ def run_from_config(
         Mapping of scenario name to impact results.
     """
 
-    config_path = Path(config_path)
+    config_path = Path(config_path) if config_path is not None else get_config_path()
     with config_path.open() as handle:
         full_config = yaml.safe_load(handle) or {}
+
+    config_root = get_config_root(full_config, config_path.parent)
 
     module_cfg = full_config.get("air_pollution")
     if not module_cfg:
@@ -96,11 +103,11 @@ def run_from_config(
     run_directory = get_results_run_directory(full_config)
     output_dir = Path(module_cfg.get("output_directory", "results/air_pollution"))
     if not output_dir.is_absolute():
-        output_dir = (config_path.parent / output_dir).resolve()
+        output_dir = (config_root / output_dir).resolve()
     output_dir = apply_results_run_directory(
         output_dir,
         run_directory,
-        repo_root=config_path.parent.resolve(),
+        repo_root=config_root,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -148,7 +155,7 @@ def run_from_config(
 
             cfg = pollutant_cfg.get(pollutant, {})
             concentrations, baseline_deaths_by_country = _load_concentrations(
-                config_path.parent,
+                config_root,
                 cfg.get("stats_file", DEFAULT_POLLUTANT_FILES.get(pollutant)),
                 cfg.get("concentration_measure", default_measure),
                 fallback_measures,

@@ -8,7 +8,11 @@ from typing import Any, Dict
 import pandas as pd
 import yaml
 
-from config_paths import apply_results_run_directory, get_results_run_directory
+from config_paths import (
+    apply_results_run_directory,
+    get_config_path,
+    get_results_run_directory,
+)
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = DEFAULT_ROOT / "config.yaml"
@@ -29,7 +33,7 @@ def _config_value(config: Dict[str, Any], *keys: str, required: bool = True) -> 
 def load_config(config_path: str | Path | None = None) -> Dict[str, Any]:
     """Load ``config.yaml`` (defaults to the repository root copy)."""
 
-    path = Path(config_path) if config_path is not None else DEFAULT_CONFIG_PATH
+    path = Path(config_path) if config_path is not None else get_config_path(DEFAULT_CONFIG_PATH)
     path = path.expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Config file not found: {path}")
