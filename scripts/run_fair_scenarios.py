@@ -198,9 +198,23 @@ SUMMARY_OUTPUT_DIR = apply_results_run_directory(
 
 
 def _discover_emission_map() -> dict[str, Path]:
-    return {
-        d.name: d for d in sorted(EMISSION_DIR.iterdir()) if d.is_dir() and (d / "co2.csv").exists()
-    }
+    mapping: dict[str, Path] = {}
+    if not EMISSION_DIR.exists():
+        return mapping
+    for mix_dir in sorted(EMISSION_DIR.iterdir()):
+        if not mix_dir.is_dir():
+            continue
+        direct = mix_dir / "co2.csv"
+        if direct.exists():
+            mapping[mix_dir.name] = mix_dir
+            continue
+        for demand_dir in sorted(mix_dir.iterdir()):
+            if not demand_dir.is_dir():
+                continue
+            if (demand_dir / "co2.csv").exists():
+                scenario_name = f"{mix_dir.name}/{demand_dir.name}"
+                mapping[scenario_name] = demand_dir
+    return mapping
 
 
 def _selected_emissions(emission_map: dict[str, Path]) -> list[str]:
@@ -324,8 +338,12 @@ def _write_csv(label: str, climate_scenario: str, result) -> None:
     # temperature path is already included as a column in every scenario file.
     # Still mirror the full CSV to resources/climate for downstream consumers.
     if not label.startswith(f"{REFERENCE_EMISSION_LABEL}_"):
-        df.to_csv(OUTPUT_DIR / f"{label}.csv", index=False)
-    df.to_csv(RESOURCE_DIR / f"{label}.csv", index=False)
+        output_path = OUTPUT_DIR / f"{label}.csv"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, index=False)
+    resource_path = RESOURCE_DIR / f"{label}.csv"
+    resource_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(resource_path, index=False)
 
 
 def _print_summary(label: str, result) -> None:

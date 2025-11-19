@@ -1,0 +1,65 @@
+calc_emissions:
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Kosovo.csv
+  output_directory: resources/Kosovo
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+  demand_scenarios:
+    baseline:
+      description: Kosovo baseline demand (was 'reference') (TWh).
+      values:
+        2025: 6.695124
+        2027: 6.695124
+        2100: 6.695124
+    upper_bound:
+      description: Kosovo upper bound (TWh).
+      values:
+        2025: 6.695124
+        2027: 3.242152
+        2100: 3.242152
+    lower_bound:
+      description: Kosovo lower bound (TWh).
+      values:
+        2025: 6.695124
+        2027: 3.859015
+        2100: 3.859015
+    # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
+    custom_example_demand:
+      description: Custom demand example (TWh).
+      values:
+        2025: 13
+        2030: 15
+        2040: 17
+        2050: 19
+        2060: 21
+        2070: 23
+        2080: 25
+        2090: 27
+        2100: 29
+  # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
+  mix_scenarios:
+    Reference:
+      description: Baseline mix (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Kosovo_reference.csv
+    WEM:
+      description: With existing measures (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Kosovo_WEM.csv
+    WAM:
+      description: With additional measures (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Kosovo_WAM.csv
+    # move mix_custom custom_example here so 'custom_example' mix is processed
+    custom_example_mix:
+      description: custom mix (copy from previous mix_custom)
+      shares:
+        coal: 0.08
+        gas: 0.12
+        hydro: 0.55
+        wind: 0.13
+        solar: 0.10
+
+  # Optional: move custom_example entries into demand_scenarios/mix_scenarios
+  # if you want them evaluated along with the other cases.

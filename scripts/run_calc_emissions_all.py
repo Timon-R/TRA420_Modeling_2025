@@ -22,7 +22,7 @@ import logging
 # Ensure src/ is importable before importing the calculator
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Mapping
 
 import pandas as pd
 import yaml
@@ -31,9 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from calc_emissions import EmissionScenarioResult, run_from_config  # noqa: E402
+from calc_emissions.writers import write_per_country_results  # noqa: E402
 from config_paths import (  # noqa: E402
     apply_results_run_directory,
     get_config_path,
+    get_config_root,
     get_results_run_directory,
 )
 
@@ -59,24 +61,55 @@ def _load_country_settings() -> (
     if config_path.exists():
         with config_path.open() as handle:
             config = yaml.safe_load(handle) or {}
+    config_root = get_config_root(config, ROOT)
     run_directory = get_results_run_directory(config)
     module_cfg = config.get("calc_emissions", {})
     countries_cfg = module_cfg.get("countries", {})
-    directory = ROOT / countries_cfg.get("directory", "data/calc_emissions/countries")
+    # default to the new data layout: data/configs for per-country YAMLs
+    configured_dir = Path(countries_cfg.get("directory", "data/configs"))
+    if configured_dir.is_absolute():
+        directory = configured_dir
+    else:
+        directory = (config_root / configured_dir).resolve()
+    # If the configured directory doesn't exist, try a few common alternate
+    # locations we have used historically so the aggregator is resilient to
+    # small reorganisations (data/calc_emissions/configs, data/configs, etc).
+    if not directory.exists():
+        candidates = [
+            config_root / configured_dir,
+            config_root / "data/configs",
+            config_root / "data/calc_emissions/configs",
+            config_root / "data/calc_emissions/countries",
+            config_root / "country_data/configs",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                directory = cand
+                break
     pattern = countries_cfg.get("pattern", "config_{name}.yaml")
-    aggregate_output = ROOT / countries_cfg.get(
-        "aggregate_output_directory", "resources/All_countries"
+    aggregate_output_cfg = Path(
+        countries_cfg.get("aggregate_output_directory", "resources/All_countries")
     )
+    if aggregate_output_cfg.is_absolute():
+        aggregate_output = aggregate_output_cfg
+    else:
+        aggregate_output = (config_root / aggregate_output_cfg).resolve()
     aggregate_results = countries_cfg.get("aggregate_results_directory")
     results_path = None
     if aggregate_results is not None:
-        results_candidate = ROOT / aggregate_results
+        results_candidate = Path(aggregate_results)
+        if not results_candidate.is_absolute():
+            results_candidate = (config_root / results_candidate).resolve()
         results_path = apply_results_run_directory(
             results_candidate,
             run_directory,
             repo_root=ROOT,
         )
-    resources_root = ROOT / countries_cfg.get("resources_root", "resources")
+    resources_root_cfg = Path(countries_cfg.get("resources_root", "resources"))
+    if resources_root_cfg.is_absolute():
+        resources_root = resources_root_cfg
+    else:
+        resources_root = (config_root / resources_root_cfg).resolve()
     scenarios = countries_cfg.get("scenarios", [])
     global_horizon = config.get("time_horizon")
     return (
@@ -153,46 +186,110 @@ def _accumulate_result(target: EmissionScenarioResult, addition: EmissionScenari
     target.delta_mtco2 = _add_series(target.delta_mtco2, addition.delta_mtco2)
 
 
+def _canonicalize_baseline_demands(
+    per_mix_results: dict[str, EmissionScenarioResult],
+    baseline_alias: str | None,
+) -> dict[str, EmissionScenarioResult]:
+    """Ensure baseline demand keys consistently use the name 'baseline'."""
+    if not baseline_alias or baseline_alias == "baseline":
+        return per_mix_results
+    renamed: dict[str, EmissionScenarioResult] = {}
+    for key, result in per_mix_results.items():
+        if "/" in key:
+            mix, demand = key.split("/", 1)
+            if demand == baseline_alias:
+                key = f"{mix}/baseline"
+        renamed[key] = result
+    return renamed
+
+
+def _ensure_global_baseline_alias(
+    aggregated: dict[str, EmissionScenarioResult],
+) -> None:
+    """Expose a single 'baseline' key for modules that expect a global reference."""
+    if "baseline" in aggregated:
+        return
+    preferred = ["reference/baseline", "baseline/reference"]
+    baseline_key = next((key for key in preferred if key in aggregated), None)
+    if baseline_key is None:
+        baseline_candidates = [name for name in aggregated if name.endswith("/baseline")]
+        if baseline_candidates:
+            baseline_key = sorted(baseline_candidates)[0]
+    if baseline_key is not None:
+        aggregated["baseline"] = aggregated[baseline_key]
+
+
+def _apply_scenario_aliases(
+    aggregated: dict[str, EmissionScenarioResult],
+    aliases: Mapping[str, tuple[str, str]],
+) -> None:
+    """Expose named scenarios that map to specific mix/demand combinations."""
+    for alias, (mix, demand) in aliases.items():
+        key = f"{mix}/{demand}"
+        result = aggregated.get(key)
+        if result is not None:
+            aggregated[alias] = result
+
+
 def _build_aggregated_results(
     per_country_results: List[dict[str, EmissionScenarioResult]],
 ) -> dict[str, EmissionScenarioResult]:
-    baseline_agg: EmissionScenarioResult | None = None
-    scenario_aggs: Dict[str, EmissionScenarioResult] = {}
+    # New aggregation: input per_country_results is a list where each element is a
+    # mapping of scenario keys of the form '<mix>/<demand>' -> EmissionScenarioResult.
+    # We aggregate per '<mix>' and compute deltas for each '<mix>/<demand>' vs
+    # the '<mix>/baseline' aggregated totals.
+    baseline_aggs: Dict[str, EmissionScenarioResult] = {}
+    scenario_aggs: Dict[tuple[str, str], EmissionScenarioResult] = {}
 
     for result_map in per_country_results:
-        baseline = result_map["baseline"]
-        if baseline_agg is None:
-            baseline_agg = _clone_result(baseline)
-        else:
-            _accumulate_result(baseline_agg, baseline)
-
         for scenario_name, scenario_res in result_map.items():
-            if scenario_name == "baseline":
+            if "/" not in scenario_name:
+                # Skip unexpected keys
                 continue
-            agg = scenario_aggs.get(scenario_name)
-            if agg is None:
-                agg = _clone_result(scenario_res)
-                scenario_aggs[scenario_name] = agg
+            mix, demand = scenario_name.split("/", 1)
+            if demand == "baseline":
+                agg = baseline_aggs.get(mix)
+                if agg is None:
+                    baseline_aggs[mix] = _clone_result(scenario_res)
+                else:
+                    _accumulate_result(agg, scenario_res)
             else:
-                _accumulate_result(agg, scenario_res)
+                key = (mix, demand)
+                agg = scenario_aggs.get(key)
+                if agg is None:
+                    scenario_aggs[key] = _clone_result(scenario_res)
+                else:
+                    _accumulate_result(agg, scenario_res)
 
-    if baseline_agg is None:
-        raise ValueError("No baseline results aggregated; ensure country configs exist.")
+    if not baseline_aggs:
+        raise ValueError(
+            "No baseline results aggregated; ensure country configs include a "
+            "'baseline' demand scenario."
+        )
 
-    # Recompute deltas against aggregated baseline
-    baseline_co2 = baseline_agg.total_emissions_mt.get("co2")
-    for _scenario_name, scenario_res in scenario_aggs.items():
-        totals = scenario_res.total_emissions_mt.get("co2")
-        if totals is None or baseline_co2 is None:
-            continue
-        totals = totals.reindex(baseline_co2.index.union(totals.index), fill_value=0.0)
-        baseline_aligned = baseline_co2.reindex(totals.index, fill_value=0.0)
-        scenario_res.delta_mtco2 = totals - baseline_aligned
+    # Recompute deltas for each aggregated scenario against the corresponding mix baseline
+    aggregated: Dict[str, EmissionScenarioResult] = {}
+    for (mix, demand), agg_res in scenario_aggs.items():
+        baseline_res = baseline_aggs.get(mix)
+        if baseline_res is None:
+            # No baseline for this mix; keep totals as-is and zero deltas
+            agg_res.delta_mtco2 = agg_res.delta_mtco2 * 0.0
+        else:
+            baseline_co2 = baseline_res.total_emissions_mt.get("co2")
+            totals = agg_res.total_emissions_mt.get("co2")
+            if totals is not None and baseline_co2 is not None:
+                totals = totals.reindex(baseline_co2.index.union(totals.index), fill_value=0.0)
+                baseline_aligned = baseline_co2.reindex(totals.index, fill_value=0.0)
+                agg_res.delta_mtco2 = totals - baseline_aligned
 
-    baseline_agg.delta_mtco2 = baseline_agg.delta_mtco2 * 0.0
+        aggregated[f"{mix}/{demand}"] = agg_res
 
-    aggregated: Dict[str, EmissionScenarioResult] = {"baseline": baseline_agg}
-    aggregated.update(scenario_aggs)
+    # Include aggregated baselines for each mix (with zero deltas)
+    for mix, base in baseline_aggs.items():
+        base.delta_mtco2 = base.delta_mtco2 * 0.0
+        aggregated[f"{mix}/baseline"] = base
+
+    _ensure_global_baseline_alias(aggregated)
     return aggregated
 
 
@@ -202,7 +299,9 @@ def _write_outputs(
     results_dir: Path | None,
     resources_root: Path | None,
 ) -> None:
-    baseline = aggregated["baseline"]
+    # Aggregated keys are '<mix>/<demand>'. For each key, find the corresponding
+    # mix baseline at '<mix>/baseline' to compute deltas. CSVs contain columns
+    # 'year', 'absolute', and 'delta'. Files are written to dest/<mix>/<demand>/<pollutant>.csv
     for scenario_name, scenario_res in aggregated.items():
         destinations = [resources_dir]
         if results_dir is not None:
@@ -210,18 +309,39 @@ def _write_outputs(
         if resources_root is not None:
             destinations.append(resources_root)
 
+        mix = scenario_name.split("/", 1)[0] if "/" in scenario_name else None
+        baseline_name = f"{mix}/baseline" if mix is not None else None
+
         for dest in destinations:
             scenario_dir = dest / scenario_name
             scenario_dir.mkdir(parents=True, exist_ok=True)
             for pollutant, totals in scenario_res.total_emissions_mt.items():
-                baseline_totals = baseline.total_emissions_mt.get(pollutant)
+                baseline_totals = None
+                if baseline_name is not None:
+                    baseline_res = aggregated.get(baseline_name)
+                    if baseline_res is not None:
+                        baseline_totals = baseline_res.total_emissions_mt.get(pollutant)
+
                 if baseline_totals is None:
                     delta = totals
                 else:
                     delta = totals - baseline_totals.reindex(totals.index, fill_value=0.0)
-                df = pd.DataFrame({"year": delta.index.astype(int), "delta": delta.values})
+
+                df = pd.DataFrame(
+                    {
+                        "year": totals.index.astype(int),
+                        "absolute": totals.values,
+                        "delta": delta.values,
+                    }
+                )
                 (scenario_dir / f"{pollutant}.csv").parent.mkdir(parents=True, exist_ok=True)
                 df.to_csv(scenario_dir / f"{pollutant}.csv", index=False)
+
+
+# The per-country writer implementation has been moved to
+# `src/calc_emissions/writers.py` and is imported as
+# `write_per_country_results` at module top-level. We no longer expose the
+# underscored compatibility wrapper here.
 
 
 def run_all_countries(
@@ -253,7 +373,9 @@ def run_all_countries(
         scenario_filter = [s for s in scenarios if s]
 
     per_country_results: List[dict[str, EmissionScenarioResult]] = []
+    per_country_map: dict[str, dict[str, EmissionScenarioResult]] = {}
     LOGGER.info("Running calc_emissions for %d countries", len(configs))
+    scenario_aliases: dict[str, tuple[str, str]] = {}
     for country, cfg_path in configs.items():
         LOGGER.info("  • %s", country)
         results = run_from_config(
@@ -262,18 +384,102 @@ def run_all_countries(
             results_run_directory=run_directory,
         )
 
-        filtered_results = {"baseline": results["baseline"]}
-        available_scenarios = set(results.keys()) - {"baseline"}
-        if scenario_filter:
-            missing = set(scenario_filter) - available_scenarios
-            if missing:
-                raise KeyError(f"Country '{country}' missing scenarios: {sorted(missing)}")
-            for scenario_name in scenario_filter:
-                filtered_results[scenario_name] = results[scenario_name]
+        # Load the country config early so we can prefer any explicit demand
+        # ordering it defines when building the aggregated demand list.
+        with cfg_path.open() as handle:
+            cfg = yaml.safe_load(handle) or {}
+        mod_cfg = cfg.get("calc_emissions", {})
+        country_cfg_demands = list(mod_cfg.get("demand_scenarios", {}).keys()) if mod_cfg else []
+        baseline_cfg = mod_cfg.get("baseline") or {}
+        baseline_alias = baseline_cfg.get("demand_scenario")
+        if not isinstance(baseline_alias, str) or not baseline_alias.strip():
+            baseline_alias = "baseline"
         else:
-            for scenario_name in available_scenarios:
-                filtered_results[scenario_name] = results[scenario_name]
-        per_country_results.append(filtered_results)
+            baseline_alias = baseline_alias.strip()
+        for scenario_def in mod_cfg.get("scenarios", []) or []:
+            if not isinstance(scenario_def, Mapping):
+                continue
+            alias_name = scenario_def.get("name")
+            alias_mix = scenario_def.get("mix_scenario")
+            alias_demand = scenario_def.get("demand_scenario")
+            if not alias_name or not alias_mix or not alias_demand:
+                continue
+            alias_tuple = (str(alias_mix).strip(), str(alias_demand).strip())
+            existing = scenario_aliases.get(alias_name)
+            if existing is not None and existing != alias_tuple:
+                LOGGER.warning(
+                    "Scenario '%s' mismatch between configs: %s vs %s",
+                    alias_name,
+                    existing,
+                    alias_tuple,
+                )
+                continue
+            scenario_aliases[alias_name] = alias_tuple
+
+        # `results` is the dict returned by run_from_config(...) keyed like "<mix>/<demand>"
+        # Enforce that a global list of mix scenarios is configured.
+        # scenario_filter is loaded earlier from CLI or config.yaml (list of mix names)
+        if not scenario_filter:
+            # No global mix list provided — default to the mixes produced for this country.
+            available_mixes = {name.split("/", 1)[0] for name in results if "/" in name}
+            if not available_mixes:
+                raise RuntimeError(
+                    (
+                        "No mix scenarios found for country '{}'. Please ensure the "
+                        "country config defines mix_scenarios or pass --scenarios."
+                    ).format(country)
+                )
+            scenario_filter = sorted(available_mixes)
+            LOGGER.info("No global mix list provided; using country mixes: %s", scenario_filter)
+
+        # discover what mixes/demands the country produced
+        available_mixes = {name.split("/", 1)[0] for name in results if "/" in name}
+        available_demands = {name.split("/", 1)[1] for name in results if "/" in name}
+
+        # Ensure the country provides all requested mixes (fail if missing)
+        requested_mixes = set(scenario_filter)
+        missing_mixes = requested_mixes - available_mixes
+        if missing_mixes:
+            raise KeyError(
+                f"Country '{country}' missing required mix scenarios: {sorted(missing_mixes)}. "
+                "Each country must define all mix scenarios listed in config.yaml "
+                "under calc_emissions.countries.mix_scenarios."
+            )
+
+        # Build demand case list:
+        #  - default demand order (only included if present in the country config/results)
+        #  - then any other demand scenarios present in the country config (preserve explicit order)
+        default_demands = ["baseline", "upper_bound", "lower_bound"]
+
+        if country_cfg_demands:
+            demand_order = []
+            for d in default_demands:
+                if d in available_demands and d not in demand_order:
+                    demand_order.append(d)
+            for d in country_cfg_demands:
+                if d in available_demands and d not in demand_order:
+                    demand_order.append(d)
+            selected_demands = demand_order
+        else:
+            # fallback: derive demand cases from what run_from_config produced
+            selected_demands = [d for d in default_demands if d in available_demands]
+            for d in sorted(available_demands):
+                if d not in selected_demands:
+                    selected_demands.append(d)
+
+        # Now filter results to only include keys matching requested mixes and selected demands
+        filtered_results: dict[str, EmissionScenarioResult] = {}
+        for name, res in results.items():
+            if "/" not in name:
+                continue
+            mix, demand = name.split("/", 1)
+            if mix in requested_mixes and demand in selected_demands:
+                filtered_results[name] = res
+
+        # Replace results with the filtered mapping for downstream aggregation
+        results = _canonicalize_baseline_demands(filtered_results, baseline_alias)
+        per_country_results.append(results)
+        per_country_map[country] = results
 
         with cfg_path.open() as handle:
             cfg = yaml.safe_load(handle) or {}
@@ -297,6 +503,7 @@ def run_all_countries(
                         global_horizon,
                     )
     aggregated_results = _build_aggregated_results(per_country_results)
+    _apply_scenario_aliases(aggregated_results, scenario_aliases)
 
     resources_dest = output or default_output
     resources_dest.mkdir(parents=True, exist_ok=True)
@@ -307,6 +514,12 @@ def run_all_countries(
 
     mirror_dest = resources_root if mirror_to_root else None
     _write_outputs(aggregated_results, resources_dest, results_dest, mirror_dest)
+
+    # Write per-country CSVs to resources/<Country>/<scenario> so the aggregator
+    # can fully replace the per-country runner.
+    if per_country_map:
+        # resources_root is a Path returned by _load_country_settings
+        write_per_country_results(per_country_map, resources_root)
 
     LOGGER.info("Aggregated deltas written to %s", resources_dest)
     if results_dest is not None:

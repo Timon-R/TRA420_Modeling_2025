@@ -1,6 +1,6 @@
 run:
-  mode: scenarios  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
-  output_subdir: null  # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
+  mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  output_subdir: test  # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
 time_horizon:
@@ -14,9 +14,14 @@ calc_emissions:
     pattern: config_{name}.yaml
     aggregate_output_directory: resources/All_countries
     aggregate_results_directory: results/emissions/All_countries
-    scenarios:
-      - scenario_1_lower_bound
-      - scenario_1_upper_bound
+    demand_scenarios:
+    # custom_example
+    mix_scenarios:
+    # Scenarios here should list mix scenario NAMES (the top-level mix keys
+    # from each country config). Use the three standard mixes we now expect:
+      - Reference
+      - WEM
+      - WAM
     #  - custom_example
 
 climate_module:
@@ -25,6 +30,8 @@ climate_module:
   sample_years_option: default  # 'default' (5-year steps to 2050, then 10-year) or 'full'.
   emission_timeseries_directory: resources/All_countries  # Folder containing <scenario>/co2.csv (Mt CO₂/yr; output from calc_emissions aggregation).
   parameters:
+    # Time grid inherits from time_horizon and stretches to cover the SCC damage window.
+    # Emission adjustments are held fixed at their terminal value when extrapolating past the reporting horizon.
     climate_setup: ar6  # Options include 'ar6' (default three-layer) and 'two_box'.
     deep_ocean_efficacy: 1.28  # Plausible range 0.5–1.5 (higher slows deep-ocean uptake).
     forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.

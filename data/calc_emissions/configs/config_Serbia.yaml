@@ -1,0 +1,67 @@
+calc_emissions:
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Serbia.csv
+  output_directory: resources/Serbia
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+
+  # Demand cases processed for every mix (must contain 'baseline' or at least a key named 'baseline')
+  demand_scenarios:
+    baseline:
+      description: Serbia baseline demand (was 'reference') (TWh).
+      values:
+        2025: 30.021
+        2027: 30.021
+        2100: 30.021
+    upper_bound:
+      description: Serbia upper bound (TWh).
+      values:
+        2025: 30.021
+        2027: 10.618
+        2100: 10.618
+    lower_bound:
+      description: Serbia lower bound (TWh).
+      values:
+        2025: 30.021
+        2027: 12.010
+        2100: 12.010
+    # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
+    custom_example_demand:
+      description: Custom demand example (TWh).
+      values:
+        2025: 13
+        2030: 15
+        2040: 17
+        2050: 19
+        2060: 21
+        2070: 23
+        2080: 25
+        2090: 27
+        2100: 29
+  # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
+  mix_scenarios:
+    Reference:
+      description: Baseline mix (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Serbia_reference.csv
+    WEM:
+      description: With existing measures (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Serbia_WEM.csv
+    WAM:
+      description: With additional measures (time-series CSV).
+      type: timeseries
+      csv: country_data/electricity_mixes/electricity_mix_Serbia_WAM.csv
+    # move mix_custom custom_example here so 'custom_example' mix is processed
+    custom_example_mix:
+      description: custom mix (copy from previous mix_custom)
+      shares:
+        coal: 0.08
+        gas: 0.12
+        hydro: 0.55
+        wind: 0.13
+        solar: 0.10
+
+  # Move any custom_example entries into demand_scenarios/mix_scenarios to
+  # evaluate them as separate cases.
