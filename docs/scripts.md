@@ -8,12 +8,12 @@ This project includes small wrappers around the core modules to make end‑to‑
 
 ## Emissions
 
-- `scripts/run_calc_emissions.py` — per‑country deltas to `resources/<Country>/<scenario>/`.
+- `scripts/run_calc_emissions.py` — per‑country deltas to `results/emissions/<mix>/<Country>/`.
   - `--country <Name>` select a specific country (matches config filename).
   - Writes `co2.csv` (and pollutant CSVs) with `year,delta` in Mt/year.
-- `scripts/run_calc_emissions_all.py` — aggregates across countries to `resources/All_countries/<scenario>/`.
+- `scripts/run_calc_emissions_all.py` — aggregates across countries to `results/emissions/All_countries/<mix>/`.
   - `--countries` restrict to a subset.
-  - `--output` change aggregate resources folder; `--results-output` mirror to `results/...`.
+  - `--output` change the aggregate output folder; `--results-output` mirror to another directory.
 
 ## Air Pollution
 
@@ -26,7 +26,7 @@ This project includes small wrappers around the core modules to make end‑to‑
 
 - `scripts/run_fair_scenarios.py`
   - Uses `climate_module` block.
-  - Writes `results/climate/<emission>_<climate>.csv` and mirrors to `resources/climate/`.
+  - Writes `results/climate/<emission>_<climate>.csv`.
   - Baseline CSVs are not duplicated in results; each file contains a baseline column.
 
 ## Pattern Scaling
@@ -59,7 +59,7 @@ This project includes small wrappers around the core modules to make end‑to‑
 
 - `scripts/generate_summary.py`
   - Gathers emission, climate, mortality, and SCC results.
-  - Writes `results/summary/summary.txt`, `summary.json`, and plots.
+  - Writes `results/summary/summary.csv` plus plots (see `docs/results_summary.md` for column details).
   - Plots deduplicate emission and mortality across SSP suffixes.
 
 ## Full Pipeline
@@ -70,4 +70,4 @@ This project includes small wrappers around the core modules to make end‑to‑
 ## Cleanup Utilities
 
 - `clean_cache.py` — removes `__pycache__`, `.pytest_cache`, `.ruff_cache`, coverage files.
-- `clean_outputs.py` — deletes `resources/` and `results/` (use with caution).
+- `clean_outputs.py` — deletes `results/` (use with caution).

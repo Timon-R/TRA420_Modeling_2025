@@ -4,7 +4,8 @@ Usage
 -----
 ```bash
 python scripts/run_scc.py --method constant_discount \
-    --temperature baseline=resources/baseline_t.csv --temperature policy=resources/policy_t.csv \
+    --temperature baseline=results/climate/baseline_t.csv \
+    --temperature policy=results/climate/policy_t.csv \
     --emission baseline=data/baseline_e.csv --emission policy=data/policy_e.csv
 
 python scripts/run_scc.py --method ramsey_discount --rho 0.01 --eta 1.5 --aggregation per_year
@@ -44,6 +45,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from calc_emissions import BASE_DEMAND_CASE
+from calc_emissions.scenario_io import load_scenario_absolute, load_scenario_delta
 from config_paths import (
     apply_results_run_directory,
     get_config_path,
@@ -53,6 +56,35 @@ from economic_module import EconomicInputs, SCCAggregation, compute_scc
 from economic_module.socioeconomics import DiceSocioeconomics
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _discover_emission_scenarios(emission_root: Path, baseline_case: str) -> list[str]:
+    """Infer available emission scenario names from aggregated emission files."""
+    scenarios: set[str] = set()
+    if not emission_root.exists():
+        return []
+    for mix_dir in emission_root.iterdir():
+        if not mix_dir.is_dir():
+            continue
+        co2_path = mix_dir / "co2.csv"
+        if not co2_path.exists():
+            continue
+        try:
+            df = pd.read_csv(co2_path, comment="#")
+        except Exception:
+            continue
+        demand_cases: set[str] = set()
+        for col in df.columns:
+            if col.startswith("delta_"):
+                demand_cases.add(col.removeprefix("delta_"))
+            if col.startswith("absolute_"):
+                demand_cases.add(col.removeprefix("absolute_"))
+        for demand in demand_cases:
+            scenarios.add(f"{mix_dir.name}__{demand}")
+    if baseline_case:
+        scenarios.add(baseline_case)
+    return sorted(scenarios)
+
 
 RUN_METHODS = ["kernel", "pulse"]
 AVAILABLE_DISCOUNT_METHODS = ["constant_discount", "ramsey_discount"]
@@ -85,6 +117,21 @@ def _resolve_path(path_like: str | Path, *, apply_run_directory: bool = True) ->
             repo_root=ROOT,
         )
     return absolute
+
+
+def _load_emission_frame_from_mix(
+    root: Path,
+    scenario: str,
+    column: str,
+    baseline_case: str,
+) -> pd.DataFrame:
+    if column == "delta":
+        return load_scenario_delta(root, scenario, baseline_case=baseline_case)
+    if column == "absolute":
+        return load_scenario_absolute(root, scenario)
+    raise ValueError(
+        f"Unsupported emission column '{column}'. Use 'delta' or 'absolute' for mix-based data."
+    )
 
 
 def _max_required_year(time_cfg: Mapping[str, object], economic_cfg: Mapping[str, object]) -> int:
@@ -687,6 +734,10 @@ def main() -> None:
     global RUN_DIRECTORY
     RUN_DIRECTORY = get_results_run_directory(root_cfg)
     config = root_cfg.get("economic_module", {})
+    countries_cfg = root_cfg.get("calc_emissions", {}).get("countries", {}) or {}
+    baseline_case = (
+        str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
+    )
 
     parser = _build_parser(config, root_cfg)
     args = parser.parse_args()
@@ -781,17 +832,30 @@ def main() -> None:
         )
     else:
         data_sources_cfg = config.get("data_sources", {}) or {}
+        emission_root_input = args.emission_root or data_sources_cfg.get("emission_root")
+        emission_root_path: Path | None = None
+        if emission_root_input:
+            emission_candidate = _resolve_path(emission_root_input)
+            if emission_candidate.exists():
+                emission_root_path = emission_candidate
+        if emission_root_path is None:
+            default_emission_root = _default_emission_root(root_cfg)
+            if default_emission_root and default_emission_root.exists():
+                emission_root_path = default_emission_root
+        if emission_root_path is None:
+            emission_root_path = _prompt_for_directory("emission delta root")  # pragma: no cover
+        emission_root_path = _ensure_directory(emission_root_path, "emission delta root")
+
         reference_default = str(
-            args.reference_scenario or config.get("reference_scenario") or "baseline"
+            args.reference_scenario or config.get("reference_scenario") or f"{BASE_DEMAND_CASE}"
         )
         evaluation_cfg = config.get("evaluation_scenarios") or []
         if isinstance(evaluation_cfg, str):
             evaluation_cfg = [evaluation_cfg]
-        base_scenarios = [reference_default, *map(str, evaluation_cfg)]
-        base_scenarios = [name for name in base_scenarios if name]
-        base_scenarios = list(dict.fromkeys(base_scenarios))
-        if len(base_scenarios) < 2:
-            parser.error("Provide at least one evaluation scenario besides the reference.")
+        evaluation_cfg = [entry for entry in evaluation_cfg if str(entry).strip()]
+        discover_all = True  # always process all available emission scenarios
+        selected = set(evaluation_cfg)
+        _discover_emission_scenarios(emission_root_path, reference_default)
 
         climate_inputs = _parse_climate_labels(args.climate_scenario)
         if not climate_inputs:
@@ -815,20 +879,6 @@ def main() -> None:
         if not climate_inputs:
             parser.error("Unable to determine climate scenario labels.")
 
-        emission_root_input = args.emission_root or data_sources_cfg.get("emission_root")
-        emission_root_path: Path | None = None
-        if emission_root_input:
-            emission_candidate = _resolve_path(emission_root_input)
-            if emission_candidate.exists():
-                emission_root_path = emission_candidate
-        if emission_root_path is None:
-            default_emission_root = _default_emission_root(root_cfg)
-            if default_emission_root and default_emission_root.exists():
-                emission_root_path = default_emission_root
-        if emission_root_path is None:
-            emission_root_path = _prompt_for_directory("emission delta root")  # pragma: no cover
-        emission_root_path = _ensure_directory(emission_root_path, "emission delta root")
-
         temperature_root_input = args.temperature_root or data_sources_cfg.get("temperature_root")
         temperature_root_path: Path | None = None
         if temperature_root_input:
@@ -845,72 +895,87 @@ def main() -> None:
             )  # pragma: no cover
         temperature_root_path = _ensure_directory(temperature_root_path, "temperature root")
 
-        emission_sources = {}
-        temperature_sources = {}
-        for climate_label in climate_inputs:
-            reference_label = f"{reference_default}_{climate_label}"
-            reference_lookup[reference_label] = reference_label
-            emission_path = (emission_root_path / reference_default / "co2.csv").resolve()
-            if not emission_path.exists():
-                parser.error(
-                    "Emission delta file not found for scenario "
-                    f"'{reference_default}' under {emission_root_path}."
-                )
-            emission_sources[reference_label] = emission_path
-            temp_filename = f"{reference_default}_{climate_label}.csv"
-            temp_path = (temperature_root_path / temp_filename).resolve()
-            if not temp_path.exists():
-                parser.error(
-                    f"Temperature file '{temp_filename}' not found in {temperature_root_path}."
-                )
-            temperature_sources[reference_label] = temp_path
-
-            for base in base_scenarios:
-                if base == reference_default:
-                    continue
-                combo_label = f"{base}_{climate_label}"
-                emission_path = (emission_root_path / base / "co2.csv").resolve()
-                if not emission_path.exists():
-                    parser.error(
-                        "Emission delta file not found for scenario "
-                        f"'{base}' under {emission_root_path}."
-                    )
-                emission_sources[combo_label] = emission_path
-                temp_path = (temperature_root_path / f"{base}_{climate_label}.csv").resolve()
-                if not temp_path.exists():
-                    parser.error(
-                        "Temperature file "
-                        f"'{base}_{climate_label}.csv' not found in {temperature_root_path}."
-                    )
-                temperature_sources[combo_label] = temp_path
-                reference_lookup[combo_label] = reference_label
-        for climate_label in climate_inputs:
-            suffix = f"_{climate_label}"
-            reference_label = f"{reference_default}_{climate_label}"
-            temp_subset = {
-                name: path for name, path in temperature_sources.items() if name.endswith(suffix)
-            }
-            if not temp_subset:
+        # Build per-mix groups: SCC per SSP, damages for all mixes/demands.
+        for mix_dir in sorted(p for p in emission_root_path.iterdir() if p.is_dir()):
+            co2_path = mix_dir / "co2.csv"
+            if not co2_path.exists():
                 continue
-            if reference_label not in temp_subset:
-                parser.error(
-                    f"Temperature data missing for reference scenario '{reference_label}'."
-                )
-            emission_subset = {name: emission_sources[name] for name in temp_subset}
-            targets = [name for name in temp_subset if name != reference_label]
-            if not targets:
-                parser.error(f"No evaluation scenarios found for climate '{climate_label}'.")
-            ref_map = {name: reference_lookup.get(name, reference_label) for name in temp_subset}
-            scenario_groups.append(
-                {
-                    "reference": reference_label,
-                    "targets": targets,
-                    "temperature": temp_subset,
-                    "emission": emission_subset,
-                    "ref_map": ref_map,
-                    "climate_label": climate_label,
-                }
-            )
+            try:
+                df = pd.read_csv(co2_path, comment="#")
+            except Exception:
+                continue
+            demand_cases: set[str] = set()
+            for col in df.columns:
+                if col.startswith("delta_") or col.startswith("absolute_"):
+                    demand_cases.add(col.split("_", 1)[1])
+            if not demand_cases:
+                continue
+            baseline_default = baseline_case if baseline_case in demand_cases else BASE_DEMAND_CASE
+            if baseline_default not in demand_cases:
+                baseline_default = sorted(demand_cases)[0]
+            mix_scenarios = {f"{mix_dir.name}__{d}" for d in demand_cases}
+            chosen = mix_scenarios if discover_all else {s for s in mix_scenarios if s in selected}
+            if not chosen:
+                continue
+            reference_base = f"{mix_dir.name}__{baseline_default}"
+            if reference_base not in mix_scenarios:
+                continue
+
+            for climate_label in climate_inputs:
+                ref_label = f"{reference_base}_{climate_label}"
+                temp_map: dict[str, Path] = {}
+                emission_map: dict[str, pd.DataFrame] = {}
+                ref_lookup: dict[str, str] = {}
+
+                baseline_temp = temperature_root_path / f"{reference_base}_{climate_label}.csv"
+                if not baseline_temp.exists():
+                    continue
+                try:
+                    ref_emission = _load_emission_frame_from_mix(
+                        emission_root_path,
+                        reference_base,
+                        args.emission_column,
+                        baseline_case,
+                    )
+                except (FileNotFoundError, KeyError, ValueError):
+                    continue
+                temp_map[ref_label] = baseline_temp
+                emission_map[ref_label] = ref_emission
+                ref_lookup[ref_label] = ref_label
+
+                targets: list[str] = []
+                for scenario in sorted(chosen):
+                    if scenario == reference_base:
+                        continue
+                    label = f"{scenario}_{climate_label}"
+                    temp_file = temperature_root_path / f"{scenario}_{climate_label}.csv"
+                    if not temp_file.exists():
+                        continue
+                    try:
+                        emission_frame = _load_emission_frame_from_mix(
+                            emission_root_path,
+                            scenario,
+                            args.emission_column,
+                            baseline_case,
+                        )
+                    except (FileNotFoundError, KeyError, ValueError):
+                        continue
+                    temp_map[label] = temp_file
+                    emission_map[label] = emission_frame
+                    ref_lookup[label] = ref_label
+                    targets.append(label)
+
+                if targets:
+                    scenario_groups.append(
+                        {
+                            "reference": ref_label,
+                            "targets": targets,
+                            "temperature": temp_map,
+                            "emission": emission_map,
+                            "ref_map": ref_lookup,
+                            "climate_label": climate_label,
+                        }
+                    )
 
     if not scenario_groups:
         parser.error("No target scenarios selected for evaluation.")
@@ -956,6 +1021,11 @@ def main() -> None:
         targets = cast(list[str], group["targets"])
         ref_map = cast(dict[str, str], group["ref_map"])
         climate_label = cast(str | None, group.get("climate_label"))
+        target_list = ", ".join(targets)
+        print(
+            f"[SCC] climate={climate_label or 'default'} "
+            f"reference={reference_label} targets={len(targets)} [{target_list}]"
+        )
 
         gdp_frame_override: pd.DataFrame | None = None
         if use_socioeconomics:
@@ -1149,8 +1219,8 @@ def main() -> None:
                 )
 
                 print(
-                    f"[{run_label}:{method_label}] {scenario} vs {scenario_reference}: "
-                    f"{result.scc_usd_per_tco2:,.2f} USD/tCO2 (aggregation {aggregation}, "
+                    f"[{run_label}:{method_label}] SSP={climate_label or 'default'} "
+                    f"{scenario} vs {scenario_reference} (aggregation {aggregation}, "
                     f"base year {result.base_year})"
                 )
                 print(f"  Details written to {_format_path(details_path)}")

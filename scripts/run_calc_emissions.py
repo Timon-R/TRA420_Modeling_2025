@@ -20,13 +20,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from calc_emissions import EmissionScenarioResult, run_from_config  # noqa: E402
-from config_paths import get_results_run_directory  # noqa: E402
+from calc_emissions import BASE_DEMAND_CASE, EmissionScenarioResult, run_from_config  # noqa: E402
+from calc_emissions.writers import write_per_country_results  # noqa: E402
+from config_paths import apply_results_run_directory, get_results_run_directory  # noqa: E402
 
 LOGGER = logging.getLogger("calc_emissions.run")
 
 
-def _load_country_settings() -> tuple[Path, str, dict | None, str | None]:
+def _load_country_settings() -> (
+    tuple[
+        Path,
+        str,
+        dict | None,
+        str | None,
+        list[str],
+        list[str],
+        str,
+        Path,
+    ]
+):
     config_path = ROOT / "config.yaml"
     config = {}
     if config_path.exists():
@@ -37,7 +49,32 @@ def _load_country_settings() -> tuple[Path, str, dict | None, str | None]:
     directory = ROOT / countries_cfg.get("directory", "data/calc_emissions/countries")
     pattern = countries_cfg.get("pattern", "config_{name}.yaml")
     run_directory = get_results_run_directory(config)
-    return directory, pattern, config.get("time_horizon"), run_directory
+    mix_cases = countries_cfg.get("mix_scenarios", []) or []
+    demand_cases = countries_cfg.get("demand_scenarios", []) or []
+    baseline_case = (
+        str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
+    )
+    per_country_root_cfg = Path(countries_cfg.get("resources_root", "results/emissions"))
+    if per_country_root_cfg.is_absolute():
+        per_country_root = per_country_root_cfg
+    else:
+        per_country_root = (ROOT / per_country_root_cfg).resolve()
+    per_country_root = apply_results_run_directory(
+        per_country_root,
+        run_directory,
+        repo_root=ROOT,
+    )
+    per_country_root = _ensure_run_directory(per_country_root, run_directory)
+    return (
+        directory,
+        pattern,
+        config.get("time_horizon"),
+        run_directory,
+        mix_cases,
+        demand_cases,
+        baseline_case,
+        per_country_root,
+    )
 
 
 def _available_countries(directory: Path, pattern: str) -> str:
@@ -81,7 +118,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    directory, pattern, global_horizon, run_directory = _load_country_settings()
+    (
+        directory,
+        pattern,
+        global_horizon,
+        run_directory,
+        configured_mix_cases,
+        configured_demand_cases,
+        baseline_case,
+        per_country_root,
+    ) = _load_country_settings()
 
     if not args.config and not args.country:
         available = _available_countries(directory, pattern)
@@ -97,23 +143,28 @@ def main() -> None:
         config_path,
         default_years=global_horizon,
         results_run_directory=run_directory,
+        allowed_demand_cases=configured_demand_cases or None,
+        allowed_mix_cases=configured_mix_cases or None,
     )
 
-    # New result keys are '<mix>/<demand>'. Group by mix and print summaries
+    country_label = (
+        args.country.replace(" ", "_")
+        if args.country
+        else Path(config_path).stem.replace("config_", "")
+    )
+    write_per_country_results({country_label: results}, per_country_root, baseline_case)
+    LOGGER.info("Per-country results written under %s", per_country_root)
+
     mixes: dict[str, dict[str, EmissionScenarioResult]] = {}
-    for key, res in results.items():
-        if "/" not in key:
-            # Skip unexpected keys (if any)
-            continue
-        mix, demand = key.split("/", 1)
-        mixes.setdefault(mix, {})[demand] = res
+    for res in results.values():
+        mixes.setdefault(res.mix_case, {})[res.demand_case] = res
 
     for mix, demand_map in mixes.items():
         LOGGER.info(
             "Mix '%s' computed; demand cases: %s", mix, ", ".join(sorted(demand_map.keys()))
         )
         for demand_name, result in sorted(demand_map.items()):
-            if demand_name == "baseline":
+            if demand_name == baseline_case:
                 continue
             LOGGER.info(
                 "Mix '%s' — demand '%s' ΔCO₂ (Mt/year):\n%s",
@@ -138,3 +189,19 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _ensure_run_directory(path: Path, run_directory: str | None) -> Path:
+    if not run_directory:
+        return path
+    run_directory = run_directory.strip().strip("/")
+    if not run_directory:
+        return path
+    parts = path.resolve().parts
+    try:
+        idx = parts.index("results")
+    except ValueError:
+        return path
+    if idx + 1 < len(parts) and parts[idx + 1] == run_directory:
+        return path
+    return Path(*parts[: idx + 1]) / run_directory / Path(*parts[idx + 1 :])

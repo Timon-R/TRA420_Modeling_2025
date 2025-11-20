@@ -1,6 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/countries/emission_factors_Serbia.csv
-  output_directory: resources/calc_emissions/Serbia
+  output_directory: results/emissions/countries/Serbia
   demand_scenarios:
     reference:
       description: Serbia reference demand (TWh).

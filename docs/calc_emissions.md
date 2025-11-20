@@ -58,21 +58,23 @@ Each file (e.g. ``config_Albania.yaml``) wraps a full ``calc_emissions`` block:
   across the country's scenarios.
 - ``baseline`` – references the demand/mix scenario used as the reference when
   calculating deltas.
-- ``scenarios`` – list of electricity cases (either referencing a named
-  template or providing custom demand/mix mappings). Scenario names must align
-  across all countries when the top-level scenario filter is used.
-- ``output_directory`` / ``results_directory`` – where per-scenario CSVs are
-  written (usually under ``resources/calc_emissions/<country>/`` and
-  ``results/emissions/<country>/``).
+- ``demand_scenarios`` / ``mix_scenarios`` – mappings that define the demand
+  cases and mix cases to combine. Every mix is paired with every demand case, and
+  scenario identifiers follow `<mix>__<demand>` (for example `base_mix__scen1_lower`).
+- ``output_directory`` / ``results_directory`` – legacy fields for per-scenario CSVs.
+  The pipeline now writes directly to ``results/emissions/<mix>/<Country>/`` (per-country)
+  and ``results/emissions/All_countries/<mix>/`` (aggregated sums).
 
 ## Outputs
 
-- Per-country runs now write deltas to `resources/<Country>/<scenario>/` (intermediate per-country outputs).
-  The project also keeps an archive-style copy under the configured results directory when
-  `aggregate_results_directory` is set (for example `results/emissions/<Country>/<scenario>/`).
-- Aggregated multi-country deltas are written to `resources/All_countries/<scenario>/` and (when
-  configured) to `results/emissions/All_countries/<scenario>/`.
-- For convenience the aggregator also mirrors aggregated scenarios under `resources/<scenario>/` so the
+- Per-country runs now write outputs to `results/emissions/<mix>/<Country>/`.
+  Each CSV contains `year`, `absolute_<demand>`, and `delta_<demand>` columns for every configured
+  demand case (e.g. `absolute_base_demand`, `absolute_scen1_lower`). Deltas are computed relative to
+  the mix-specific base demand case. The project also keeps an archive-style copy under the
+  configured results directory when `aggregate_results_directory` is set (for example
+  `results/emissions/<Country>/<mix>/`).
+- Aggregated multi-country deltas are written to `results/emissions/All_countries/<mix>/`.
+- Individual mix folders under `results/emissions/` contain subfolders for every country so
   climate module can discover `co2.csv` without further configuration.
 
 ### Repository-level metadata (``config.yaml``)
@@ -95,8 +97,8 @@ country configs.
   air-quality analyses and can be ingested by downstream modules.
 -- Run `python scripts/run_calc_emissions_all.py` to process all configured countries. The aggregator will:
   - re-run the per-country calculations (so each country's configured `output_directory` is refreshed),
-  - write per-country deltas to `resources/<Country>/<scenario>/` (year,delta in Mt/year), and
-  - write aggregated multi-country deltas to `resources/All_countries/<scenario>/` (and to `results/emissions/All_countries/<scenario>/` when configured or when `--results-output` is provided).
+  - write per-country CSVs to `results/emissions/<mix>/<Country>/co2.csv` (with `absolute_*`/`delta_*` columns),
+  - write aggregated multi-country deltas to `results/emissions/All_countries/<mix>/co2.csv` (and to any additional directory passed via `--results-output`).
 
   The aggregator can therefore take over the role of the single-country runner (`scripts/run_calc_emissions.py`) when you want a single command to produce both per-country and aggregated outputs.
 
@@ -119,12 +121,12 @@ from calc_emissions.writers import write_per_country_results
 
 # per_country_map is a mapping: Country -> { scenario_name: EmissionScenarioResult }
 # where EmissionScenarioResult is the return type from the calculator.
-write_per_country_results(per_country_map, Path("resources"))
+write_per_country_results(per_country_map, Path("results/emissions"))
 ```
 
 The function writes CSVs for every pollutant found in each scenario's
-`total_emissions_mt` mapping and places files under `resources/<Country>/<scenario>/<pollutant>.csv`.
-Each CSV has two columns: `year` and `delta` (Mt/year).
+`total_emissions_mt` mapping and places files under `results/emissions/<mix>/<Country>/<pollutant>.csv`.
+Each CSV has columns `year`, `absolute_<demand>`, and `delta_<demand>` for every demand case (Mt/year relative to the base demand case).
 
 This API is useful when creating custom orchestration or tests that need to
 produce the same per-country folder layout as the `scripts/run_calc_emissions_all.py`

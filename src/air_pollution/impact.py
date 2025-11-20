@@ -24,7 +24,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from calc_emissions.calculator import EmissionScenarioResult, run_from_config as run_emissions
+from calc_emissions import (
+    BASE_DEMAND_CASE,
+    EmissionScenarioResult,
+    run_from_config as run_emissions,
+)
 from config_paths import (
     apply_results_run_directory,
     get_config_path,
@@ -131,19 +135,25 @@ def run_from_config(
             config_path=config_path,
             results_run_directory=run_directory,
         )
-    if "baseline" not in emission_results:
-        raise ValueError("calc_emissions results must include a 'baseline' entry.")
-
-    baseline = emission_results["baseline"]
+    baseline_by_mix = {
+        res.mix_case: res
+        for res in emission_results.values()
+        if res.demand_case == BASE_DEMAND_CASE
+    }
+    if not baseline_by_mix:
+        raise ValueError(f"calc_emissions results must include '{BASE_DEMAND_CASE}' demand cases.")
     pollutant_cfg = module_cfg.get("pollutants", {})
     pollutants = set(pollutant_cfg) if pollutant_cfg else set(DEFAULT_POLLUTANT_FILES)
 
     results: dict[str, AirPollutionResult] = {}
 
     for scenario_name, scenario_result in emission_results.items():
-        if scenario_name == "baseline":
+        if scenario_result.demand_case == BASE_DEMAND_CASE:
             continue
         if selection and scenario_name not in selection:
+            continue
+        baseline = baseline_by_mix.get(scenario_result.mix_case)
+        if baseline is None:
             continue
 
         pollutant_results: dict[str, PollutantImpact] = {}

@@ -78,18 +78,31 @@ def get_config_root(config: Mapping[str, object], fallback: Path | None = None) 
     return (fallback or REPO_ROOT).resolve()
 
 
-def get_results_run_directory(config: Mapping[str, object] | None) -> str | None:
-    """Extract the ``results.run_directory`` value from the root configuration mapping."""
+def get_results_run_directory(
+    config: Mapping[str, object] | None, *, include_run_subdir: bool = True
+) -> str | None:
+    """Extract the run-directory component from the root configuration mapping.
+
+    Preference order:
+    1. ``results.run_directory`` (explicit override)
+    2. ``run.output_subdir`` (common single-run convenience flag)
+    """
 
     if not isinstance(config, Mapping):
         return None
     results_cfg = config.get("results")
-    if not isinstance(results_cfg, Mapping):
-        return None
-    raw_value = results_cfg.get("run_directory")
-    if raw_value is None:
-        return None
-    return sanitize_run_directory(str(raw_value))
+    raw_value = None if not isinstance(results_cfg, Mapping) else results_cfg.get("run_directory")
+    sanitized = sanitize_run_directory(str(raw_value)) if raw_value is not None else None
+    if sanitized:
+        return sanitized
+
+    if include_run_subdir:
+        run_cfg = config.get("run") if isinstance(config, Mapping) else None
+        if not isinstance(run_cfg, Mapping):
+            return None
+        subdir = run_cfg.get("output_subdir")
+        return sanitize_run_directory(str(subdir)) if subdir is not None else None
+    return None
 
 
 def apply_results_run_directory(
@@ -112,9 +125,9 @@ def apply_results_run_directory(
         return absolute
 
     parts = rel.parts
-    if not parts:
+    if not parts or parts[0] != "results":
         return absolute
-    if parts[0] != "results":
+    if len(parts) > 1 and parts[1] == run_directory:
         return absolute
 
     new_rel = Path("results") / run_directory / Path(*parts[1:])

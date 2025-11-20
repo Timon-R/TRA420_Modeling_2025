@@ -1,6 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/countries/emission_factors_Bosnia-Herzegovina.csv
-  output_directory: resources/calc_emissions/Bosnia-Herzegovina
+  output_directory: results/emissions/countries/Bosnia-Herzegovina
   demand_scenarios:
     reference:
       description: Bosnia-Herzegovina reference demand (TWh).

@@ -1,26 +1,26 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Serbia.csv
-  output_directory: resources/Serbia
+  output_directory: results/emissions/Serbia
   years:
     start: 2025
     end: 2100
     step: 5
 
-  # Demand cases processed for every mix (must contain 'baseline' or at least a key named 'baseline')
+  # Demand cases processed for every mix (must contain 'base_demand')
   demand_scenarios:
-    baseline:
-      description: Serbia baseline demand (was 'reference') (TWh).
+    base_demand:
+      description: Serbia base demand (was 'reference') (TWh).
       values:
         2025: 30.021
         2027: 30.021
         2100: 30.021
-    upper_bound:
+    scen1_upper:
       description: Serbia upper bound (TWh).
       values:
         2025: 30.021
         2027: 10.618
         2100: 10.618
-    lower_bound:
+    scen1_lower:
       description: Serbia lower bound (TWh).
       values:
         2025: 30.021
@@ -41,7 +41,7 @@ calc_emissions:
         2100: 29
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
-    Reference:
+    base_mix:
       description: Baseline mix (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Serbia_reference.csv

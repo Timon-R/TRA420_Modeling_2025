@@ -1,24 +1,24 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Kosovo.csv
-  output_directory: resources/Kosovo
+  output_directory: results/emissions/Kosovo
   years:
     start: 2025
     end: 2100
     step: 5
   demand_scenarios:
-    baseline:
-      description: Kosovo baseline demand (was 'reference') (TWh).
+    base_demand:
+      description: Kosovo base demand (was 'reference') (TWh).
       values:
         2025: 6.695124
         2027: 6.695124
         2100: 6.695124
-    upper_bound:
+    scen1_upper:
       description: Kosovo upper bound (TWh).
       values:
         2025: 6.695124
         2027: 3.242152
         2100: 3.242152
-    lower_bound:
+    scen1_lower:
       description: Kosovo lower bound (TWh).
       values:
         2025: 6.695124
@@ -39,7 +39,7 @@ calc_emissions:
         2100: 29
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
-    Reference:
+    base_mix:
       description: Baseline mix (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Kosovo_reference.csv

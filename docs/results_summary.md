@@ -1,6 +1,6 @@
 # Results Summary
 
-Collects cross‑module indicators and produces a concise overview (text, JSON, and plots).
+Collects cross‑module indicators and produces a concise overview (tabular CSV plus optional plots).
 
 ## What It Aggregates
 
@@ -24,7 +24,9 @@ To reduce duplication, plots that do not vary by climate pathway are de‑duplic
 results:
   run_directory: null        # Optional: set 'experiment_A' to write to results/experiment_A/…
   summary:
-    years: [2030, 2050]     # Reported years in text/JSON/plots
+    years: [2030, 2050]     # Reported years in the CSV and plots
+    year_period:
+      - {start: 2025, end: 2050}    # Optional period sums for damages/mortality
     output_directory: results/summary
     include_plots: true
     plot_format: png
@@ -39,19 +41,29 @@ PYTHONPATH=src python scripts/generate_summary.py
 ```
 
 If you configure `results.run_directory`, every module (including the summary)
-will write to `results/<run_directory>/…`, keeping resources shared while
+will write to `results/<run_directory>/…`, keeping multi-module runs aligned while
 avoiding overwrites between experiments.
 
 It discovers economic results in `results/economic/`, climate CSVs in
-`resources/climate/`, emissions in `resources/All_countries/<scenario>/`, and
+`results/climate/`, emissions in `results/emissions/All_countries/<mix>/`, and
 air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted for the run directory when configured).
 
 ## Outputs
 
-- `summary.txt` — human‑readable overview for the configured years.
--   Includes an explicit note clarifying that damages are per emission year and
-    denominated in present-value USD for `economic_module.base_year`.
-- `summary.json` — machine‑readable payload with the same values.
+- `summary.csv` — a wide table where each row represents an emission scenario + climate pathway
+  combination. Columns include:
+  - `energy_mix`, `climate_scenario`, `demand_case` (`base_demand`, `scen1_lower`, `scen1_mean`, `scen1_upper`).
+  - For every configured year: `delta_co2_Mt_all_countries_<year>`, `delta_T_C_<year>`,
+    `air_pollution_mortality_difference_<year>`, `air_pollution_mortality_difference_percent_<year>`,
+    optional `air_pollution_monetary_benefit_usd_<year>`, `SCC_<method>_<year>_usd_per_tco2` (or
+    `scc_average_<method>` when averaging), and `damages_PPP2020_usd_baseyear_<base_year>_<method>_<year>`.
+  - For `year_period` ranges, sums are added as `air_pollution_mortality_difference_sum_<start>_to_<end>`,
+    `air_pollution_monetary_benefit_sum_usd_<start>_to_<end>`, and
+    `damages_PPP2020_usd_baseyear_<base_year>_sum_<method>_<start>_to_<end>`.
+  - Per-country pollutant deltas aggregated directly from `results/emissions/<mix>/<Country>/<pollutant>.csv`
+    (e.g., `delta_co2_Serbia_2030`, `delta_pm25_Bosnia_and_Herzegovina_2050`) and pattern-scaled
+    temperature deltas (`delta_T_<ISO3>_<year>` from `results/climate_scaled`).
+  This replaces the previous text/JSON outputs and is consumed by downstream notebooks directly.
 - `plots/` — grouped bar charts for emission deltas, temperature deltas,
   damages, SCC (one per method), and mortality metrics; plus emission and
   temperature timeseries charts.
@@ -70,7 +82,7 @@ air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted f
 ## De‑duplication Rules
 
 - Emission delta, mortality delta, and mortality percent plots are collapsed by
-  scenario base name (e.g., `scenario_1_lower_bound`), ignoring climate suffixes
+  scenario base name (e.g., `scen1_lower_base_mix`), ignoring climate suffixes
   like `_ssp119`, `_ssp245`, `_ssp370`.
 - SCC and temperature plots retain climate suffixes because results vary by
   pathway.

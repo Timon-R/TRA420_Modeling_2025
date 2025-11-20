@@ -1,26 +1,26 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Montenegro.csv
-  output_directory: resources/Montenegro
+  output_directory: results/emissions/Montenegro
   years:
     start: 2025
     end: 2100
     step: 5
   
-  # Demand cases processed for every mix (must contain 'baseline' or at least a key named 'baseline')
+  # Demand cases processed for every mix (must contain 'base_demand')
   demand_scenarios:
-    baseline:
-      description: Montenegro baseline demand (was 'reference') (TWh).
+    base_demand:
+      description: Montenegro base demand (was 'reference') (TWh).
       values:
         2025: 2.694
         2027: 2.694
         2100: 2.694
-    upper_bound:
+    scen1_upper:
       description: Montenegro upper bound (TWh).
       values:
         2025: 2.694
         2027: 1.899
         2100: 1.899
-    lower_bound:
+    scen1_lower:
       description: Montenegro lower bound (TWh).
       values:
         2025: 2.694
@@ -42,7 +42,7 @@ calc_emissions:
 
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
-    Reference:
+    base_mix:
       description: Baseline mix (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Montenegro_reference.csv

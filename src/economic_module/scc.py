@@ -260,17 +260,23 @@ class EconomicInputs:
             raise ValueError("Temperature and emission scenario labels must match.")
 
         temp_frames: dict[str, pd.DataFrame] = {}
-        for label, path in temperature_paths.items():
-            frame = _load_yearly_csv(
-                path,
-                required_columns={temperature_column},
-                optional_columns={"climate_scenario"},
-            )
+        for label, source in temperature_paths.items():
+            if isinstance(source, pd.DataFrame):
+                frame = source.copy()
+            else:
+                frame = _load_yearly_csv(
+                    source,
+                    required_columns={temperature_column},
+                    optional_columns={"climate_scenario"},
+                )
             temp_frames[label] = frame.rename(columns={temperature_column: "temperature_c"})
 
         emission_frames: dict[str, pd.DataFrame] = {}
-        for label, path in emission_paths.items():
-            frame = _load_yearly_csv(path, required_columns={emission_column})
+        for label, source in emission_paths.items():
+            if isinstance(source, pd.DataFrame):
+                frame = source.copy()
+            else:
+                frame = _load_yearly_csv(source, required_columns={emission_column})
             emission_frames[label] = frame.rename(columns={emission_column: "emission_raw"})
 
         climate_scenarios = _extract_climate_scenarios(temp_frames)

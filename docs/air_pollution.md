@@ -190,7 +190,7 @@ Example invocation with a focused scenario set and custom weights:
 
 ```yaml
 air_pollution:
-  scenarios: [scenario_1_lower_bound, scenario_1_upper_bound]
+  scenarios: [base_mix__scen1_lower, base_mix__scen1_upper]
   country_weights:
     Serbia: 2
     Albania: 1

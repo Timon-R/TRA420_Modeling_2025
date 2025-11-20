@@ -1,6 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/countries/emission_factors_Albania.csv
-  output_directory: resources/calc_emissions/Albania
+  output_directory: results/emissions/countries/Albania
   demand_scenarios:
     reference:
       description: Albania reference demand (2023) (TWh).

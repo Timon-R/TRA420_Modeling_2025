@@ -1,9 +1,16 @@
-"""Utilities for translating electricity scenarios into emission differences."""
-
-from .calculator import EmissionScenarioResult, calculate_emissions, run_from_config
+from .calculator import (
+    EmissionScenarioResult,
+    calculate_emissions,
+    compose_scenario_name,
+    run_from_config,
+)
+from .constants import BASE_DEMAND_CASE, POLLUTANTS
 
 __all__ = [
+    "BASE_DEMAND_CASE",
+    "POLLUTANTS",
     "EmissionScenarioResult",
     "calculate_emissions",
+    "compose_scenario_name",
     "run_from_config",
 ]

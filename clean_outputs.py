@@ -16,7 +16,6 @@ def _remove_tree(path: Path) -> None:
 
 def main() -> None:
     root = Path(__file__).resolve().parent
-    _remove_tree(root / "resources")
     _remove_tree(root / "results")
 
 

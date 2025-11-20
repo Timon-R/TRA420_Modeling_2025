@@ -1,7 +1,3 @@
-resources/**
-!resources/
-!resources/temperature_baseline_dummy.csv
-!resources/temperature_policy_dummy.csv
 results/
 __pycache__/
 .DS_Store

@@ -15,8 +15,7 @@ from config_paths import get_config_path  # noqa: E402
 from results_summary import (  # noqa: E402
     build_summary,
     write_plots,
-    write_summary_json,
-    write_summary_text,
+    write_summary_csv,
 )
 
 
@@ -48,11 +47,8 @@ def main() -> None:
         logger.error("Unable to build summary: %s", exc)
         return
 
-    summary_txt = write_summary_text(settings, methods, metrics_map)
-    logger.info("Summary written to %s", summary_txt.relative_to(ROOT))
-
-    summary_json = write_summary_json(settings, methods, metrics_map)
-    logger.info("JSON summary written to %s", summary_json.relative_to(ROOT))
+    summary_csv = write_summary_csv(settings, methods, metrics_map)
+    logger.info("Summary CSV written to %s", summary_csv.relative_to(ROOT))
 
     write_plots(settings, methods, metrics_map)
     if settings.include_plots:

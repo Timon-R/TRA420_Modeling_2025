@@ -1,26 +1,26 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_North_Macedonia.csv
-  output_directory: resources/North_Macedonia
+  output_directory: results/emissions/North_Macedonia
   years:
     start: 2025
     end: 2100
     step: 5
     
-  # Demand cases processed for every mix (must contain 'baseline' or at least a key named 'baseline')
+  # Demand cases processed for every mix (must contain 'base_demand')
   demand_scenarios:
-    baseline:
-      description: North Macedonia baseline demand (was 'reference') (TWh).
+    base_demand:
+      description: North Macedonia base demand (was 'reference') (TWh).
       values:
         2025: 5.781678
         2027: 5.781678
         2100: 5.781678
-    upper_bound:
+    scen1_upper:
       description: North Macedonia upper bound (TWh).
       values:
         2025: 5.781678
         2027: 2.808863
         2100: 2.808863
-    lower_bound:
+    scen1_lower:
       description: North Macedonia lower bound (TWh).
       values:
         2025: 5.781678
@@ -41,7 +41,7 @@ calc_emissions:
         2100: 29
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
-    Reference:
+    base_mix:
       description: Baseline mix (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_North_Macedonia_reference.csv

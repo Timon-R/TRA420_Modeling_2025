@@ -33,22 +33,24 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
         ],
     )
 
-    emission_root = tmp_path / "emissions"
-    temperature_root = tmp_path / "climate"
-    for scenario, deltas in {
-        "baseline": [0.0, 0.0],
-        "policy": [0.0, -5.0],
-    }.items():
-        _write_csv(
-            emission_root / scenario / "co2.csv",
-            [
-                {"year": year, "delta": value if idx else 0.0}
-                for idx, (year, value) in enumerate(zip(years, deltas, strict=False))
-            ],
-        )
+    emission_root = tmp_path / "results" / "emissions" / "All_countries"
+    temperature_root = tmp_path / "results" / "climate"
+    _write_csv(
+        emission_root / "base_mix" / "co2.csv",
+        [
+            {
+                "year": year,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": 0.0 if idx == 0 else -5.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": 0.0 if idx == 0 else -5.0,
+            }
+            for idx, year in enumerate(years)
+        ],
+    )
 
     _write_csv(
-        temperature_root / "baseline_ssp245.csv",
+        temperature_root / "base_mix__base_demand_ssp245.csv",
         [
             {
                 "year": year,
@@ -60,7 +62,7 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
         ],
     )
     _write_csv(
-        temperature_root / "policy_ssp245.csv",
+        temperature_root / "base_mix__policy_ssp245.csv",
         [
             {
                 "year": year,
@@ -76,8 +78,8 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
 
     economic_cfg = {
         "gdp_series": str(gdp_path),
-        "reference_scenario": "baseline",
-        "evaluation_scenarios": ["policy"],
+        "reference_scenario": "base_mix__base_demand",
+        "evaluation_scenarios": ["base_mix__policy"],
         "base_year": 2025,
         "aggregation": "average",
         "run": {
@@ -100,6 +102,15 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
     config = {
         "time_horizon": {"start": 2025, "end": 2030, "step": 5},
         "economic_module": economic_cfg,
+        "calc_emissions": {
+            "countries": {
+                "baseline_demand_case": "base_demand",
+                "demand_scenarios": ["base_demand", "policy"],
+                "mix_scenarios": ["base_mix"],
+                "aggregate_output_directory": str(emission_root),
+                "resources_root": str(tmp_path / "results" / "emissions"),
+            }
+        },
     }
     return config
 
@@ -121,7 +132,7 @@ def test_run_scc_aggregation_horizon(
     else:
         run_scc.main()
         output_dir = Path(config["economic_module"]["output_directory"])
-        timeseries = output_dir / "scc_timeseries_ramsey_discount_policy_ssp245.csv"
+        timeseries = output_dir / "scc_timeseries_ramsey_discount_base_mix__policy_ssp245.csv"
         assert timeseries.exists()
         df = pd.read_csv(timeseries)
         assert set(df["year"].astype(int)) == set(range(2025, 2031))
@@ -144,7 +155,7 @@ def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     run_scc.main()
     output_dir = Path(config["economic_module"]["output_directory"])
-    base = "ramsey_discount_policy_ssp245"
+    base = "ramsey_discount_base_mix__policy_ssp245"
 
     primary = output_dir / f"scc_timeseries_{base}.csv"
     assert primary.exists()

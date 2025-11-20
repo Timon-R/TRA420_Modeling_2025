@@ -1,6 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/countries/emission_factors_Kosovo.csv
-  output_directory: resources/calc_emissions/Kosovo
+  output_directory: results/emissions/countries/Kosovo
   demand_scenarios:
     reference:
       description: Kosovo reference demand (TWh).

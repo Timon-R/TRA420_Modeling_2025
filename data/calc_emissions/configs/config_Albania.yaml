@@ -1,26 +1,26 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Albania.csv
-  output_directory: resources/Albania
+  output_directory: results/emissions/Albania
   years:
     start: 2025
     end: 2100
     step: 5
 
-  # Demand cases processed for every mix (must contain 'baseline' or at least a key named 'baseline')
+  # Demand cases processed for every mix (must contain 'base_demand')
   demand_scenarios:
-    baseline:
-      description: Albania baseline demand (was 'reference') (TWh).
+    base_demand:
+      description: Albania base demand (was 'reference') (TWh).
       values:
         2025: 5.887708
         2027: 5.887708
         2100: 5.887708
-    upper_bound:
+    scen1_upper:
       description: Albania Scenario 1 Upper bound (TWh).
       values:
         2025: 5.887708
         2027: 3.197192
         2100: 3.197192
-    lower_bound:
+    scen1_lower:
       description: Albania Scenario 1 Lower bound (TWh).
       values:
         2025: 5.887708
@@ -42,7 +42,7 @@ calc_emissions:
 
   # Mix scenarios — top-level loop; each mix will be paired with every demand case above.
   mix_scenarios:
-    Reference:
+    base_mix:
       description: Baseline mix (time-series CSV).
       type: timeseries
       csv: country_data/electricity_mixes/electricity_mix_Albania_reference.csv

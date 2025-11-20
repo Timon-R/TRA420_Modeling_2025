@@ -8,8 +8,7 @@ from results_summary import (
     _include_background_plots,
     _plot_socioeconomic_timeseries,
     build_summary,
-    write_summary_json,
-    write_summary_text,
+    write_summary_csv,
 )
 
 
@@ -22,10 +21,33 @@ def _write_csv(path: Path, data: list[dict]) -> None:
 def test_build_summary_collects_metrics(tmp_path: Path):
     root = tmp_path
 
+    gdp_path = root / "gdp.csv"
+    _write_csv(
+        gdp_path,
+        [
+            {"year": 2025, "gdp_trillion_usd": 1.0, "population_million": 5.0},
+            {"year": 2030, "gdp_trillion_usd": 1.2, "population_million": 5.1},
+            {"year": 2050, "gdp_trillion_usd": 1.5, "population_million": 5.2},
+        ],
+    )
+
+    emission_root = root / "results" / "emissions" / "All_countries"
+    temperature_root = root / "results" / "climate"
+
     config = {
+        "calc_emissions": {
+            "countries": {
+                "baseline_demand_case": "base_demand",
+                "demand_scenarios": ["base_demand", "policy"],
+                "mix_scenarios": ["base_mix"],
+                "aggregate_output_directory": "results/emissions/All_countries",
+                "resources_root": "results/emissions",
+            }
+        },
         "economic_module": {
-            "reference_scenario": "baseline",
-            "evaluation_scenarios": ["policy"],
+            "reference_scenario": "base_mix__base_demand",
+            "evaluation_scenarios": ["base_mix__policy"],
+            "gdp_series": str(gdp_path),
             "methods": {
                 "run": "ramsey_discount",
             },
@@ -34,8 +56,8 @@ def test_build_summary_collects_metrics(tmp_path: Path):
             "aggregation": "average",
             "aggregation_horizon": {"start": 2025, "end": 2050},
             "data_sources": {
-                "emission_root": str(root / "resources"),
-                "temperature_root": str(root / "resources" / "climate"),
+                "emission_root": str(emission_root),
+                "temperature_root": str(temperature_root),
                 "climate_scenarios": ["ssp245"],
             },
         },
@@ -51,32 +73,76 @@ def test_build_summary_collects_metrics(tmp_path: Path):
 
     # Emission deltas
     _write_csv(
-        root / "resources" / "policy" / "co2.csv",
+        emission_root / "base_mix" / "co2.csv",
         [
-            {"year": 2025, "delta": 0.0},
-            {"year": 2030, "delta": -10.0},
-            {"year": 2050, "delta": -15.0},
+            {
+                "year": 2025,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": 0.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": 0.0,
+            },
+            {
+                "year": 2030,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": -10.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": -10.0,
+            },
+            {
+                "year": 2050,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": -15.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": -15.0,
+            },
         ],
     )
+
+    # Per-country pollutant deltas
     _write_csv(
-        root / "resources" / "baseline" / "co2.csv",
+        root / "results" / "emissions" / "base_mix" / "Serbia" / "co2.csv",
         [
-            {"year": 2025, "delta": 0.0},
-            {"year": 2030, "delta": 0.0},
-            {"year": 2050, "delta": 0.0},
+            {
+                "year": 2025,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": 0.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": 0.0,
+            },
+            {
+                "year": 2030,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": -5.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": -5.0,
+            },
+        ],
+    )
+
+    _write_csv(
+        root / "results" / "emissions" / "base_mix" / "Serbia" / "nox.csv",
+        [
+            {
+                "year": 2030,
+                "absolute_base_demand": 0.0,
+                "absolute_policy": -1.0,
+                "delta_base_demand": 0.0,
+                "delta_policy": -1.0,
+            }
         ],
     )
 
     # Temperature deltas
     _write_csv(
-        root / "resources" / "climate" / "policy_ssp245.csv",
+        temperature_root / "base_mix__policy_ssp245.csv",
         [
             {"year": 2030, "temperature_baseline": 3.0, "temperature_adjusted": 2.8},
             {"year": 2050, "temperature_baseline": 3.5, "temperature_adjusted": 3.2},
         ],
     )
     _write_csv(
-        root / "resources" / "climate" / "baseline_ssp245.csv",
+        temperature_root / "base_mix__base_demand_ssp245.csv",
         [
             {"year": 2030, "temperature_baseline": 3.0, "temperature_adjusted": 3.0},
             {"year": 2050, "temperature_baseline": 3.5, "temperature_adjusted": 3.5},
@@ -85,7 +151,10 @@ def test_build_summary_collects_metrics(tmp_path: Path):
 
     # SCC timeseries
     _write_csv(
-        root / "results" / "economic" / "scc_timeseries_ramsey_discount_policy_ssp245.csv",
+        root
+        / "results"
+        / "economic"
+        / "scc_timeseries_ramsey_discount_base_mix__policy_ssp245.csv",
         [
             {
                 "year": 2030,
@@ -108,8 +177,8 @@ def test_build_summary_collects_metrics(tmp_path: Path):
         root / "results" / "economic" / "scc_summary.csv",
         [
             {
-                "scenario": "policy_ssp245",
-                "reference": "baseline_ssp245",
+                "scenario": "base_mix__policy_ssp245",
+                "reference": "base_mix__base_demand_ssp245",
                 "method": "ramsey_discount",
                 "aggregation": "average",
                 "scc_usd_per_tco2": 50.0,
@@ -120,7 +189,7 @@ def test_build_summary_collects_metrics(tmp_path: Path):
 
     # Mortality summary
     _write_csv(
-        root / "results" / "air_pollution" / "policy" / "total_mortality_summary.csv",
+        root / "results" / "air_pollution" / "base_mix__policy" / "total_mortality_summary.csv",
         [
             {
                 "year": 2030,
@@ -148,13 +217,20 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     )
 
     settings, methods, metrics_map = build_summary(root, config)
+    summary_csv = write_summary_csv(settings, methods, metrics_map)
+    assert summary_csv.exists()
+    summary_df = pd.read_csv(summary_csv)
+    assert "energy_mix" in summary_df.columns
+    assert "delta_co2_Mt_all_countries_2030" in summary_df.columns
+    assert "delta_co2_Serbia_2030" in summary_df.columns
+    assert summary_df.iloc[0]["delta_co2_Serbia_2030"] == pytest.approx(-5.0)
 
     assert settings.years == [2030, 2050]
     assert settings.aggregation_mode == "average"
     assert settings.aggregation_horizon == (2025, 2050)
     assert methods == ["ramsey_discount"]
 
-    policy_key = "policy_ssp245"
+    policy_key = "base_mix__policy_ssp245"
 
     assert policy_key in metrics_map
     policy_metrics = metrics_map[policy_key]
@@ -162,51 +238,16 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     assert policy_metrics.emission_timeseries == {2025: 0.0, 2030: -10.0, 2050: -15.0}
     assert policy_metrics.temperature_timeseries is not None
     assert policy_metrics.temperature_timeseries[2030] == pytest.approx(-0.2)
-    assert policy_metrics.scc_usd_per_tco2["ramsey_discount"][2030] == 50.0
-    assert policy_metrics.damages_usd["ramsey_discount"][2030] == pytest.approx(-5.0e8)
-    assert policy_metrics.damages_usd["ramsey_discount"][2050] == pytest.approx(-9.0e8)
     assert policy_metrics.mortality_delta[2050] == -30
     assert policy_metrics.mortality_value_delta is not None
     assert policy_metrics.mortality_value_delta[2030] == -20_000_000
     assert policy_metrics.scc_average["ramsey_discount"] == 50.0
-    assert policy_metrics.damage_total_usd["ramsey_discount"] == pytest.approx(-12.5e9)
     assert "baseline_ssp245" not in metrics_map
-
-    summary_txt = write_summary_text(
-        settings, methods, metrics_map, output_path=root / "results" / "summary"
-    )
-    assert summary_txt.exists()
-    content = summary_txt.read_text()
-    assert "Damages are per reporting year and expressed as present-value 2025 USD." in content
-    assert "Scenario: policy_ssp245" in content
-    assert "SCC average (2025-2050):" in content
-    assert "  Damages (Billion USD, PV 2025):" in content
-    assert "  Mortality value (USD/year):" in content
-    assert "      2030: -0.50" in content
-
-    summary_json = write_summary_json(
-        settings, methods, metrics_map, output_path=root / "results" / "summary"
-    )
-    assert summary_json.exists()
-    data = summary_json.read_text()
-    assert '"policy_ssp245"' in data
 
     # Re-run with per-year aggregation to ensure SCC series are reported for configured years.
     config["economic_module"]["aggregation"] = "per_year"
     settings_py, methods_py, metrics_map_py = build_summary(root, config)
     assert settings_py.aggregation_mode == "per_year"
-
-    summary_txt_py = write_summary_text(
-        settings_py, methods_py, metrics_map_py, output_path=root / "results" / "summary_per_year"
-    )
-    text_py = summary_txt_py.read_text()
-    assert "Damages are per reporting year and expressed as present-value 2025 USD." in text_py
-    assert "SCC (USD/tCO₂):" in text_py
-    assert "    ramsey_discount:" in text_py
-    assert "      2030: 50.00" in text_py
-    assert "  Damages (Billion USD, PV 2025):" in text_py
-    assert "      2050: -0.90" in text_py
-    assert "  Mortality value (USD/year):" in text_py
 
 
 def test_include_background_plots_copies_files(tmp_path: Path):

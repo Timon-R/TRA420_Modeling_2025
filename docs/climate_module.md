@@ -134,14 +134,14 @@ historical constraints before adding emission deltas.
 - `climate_scenario` – SSP identifier (e.g., `ssp245`) used downstream by the economic module to
   choose matching GDP and population data.
 
-These are mirrored under `resources/climate` for downstream use (e.g., the
+These are written under `results/climate` for downstream use (e.g., the
 economic module). To avoid duplication, baseline-only files are no longer
-written to `results/climate` — each scenario CSV already includes the baseline
+mirrored elsewhere — each scenario CSV already includes the baseline
 temperature column.
 
 ## Usage
 
-Run the FaIR wrapper after emission deltas exist in `resources/<scenario>/co2.csv`:
+Run the FaIR wrapper after emission deltas exist in `results/emissions/All_countries/<mix>/co2.csv`:
 
 ```bash
 python scripts/run_fair_scenarios.py

@@ -10,25 +10,27 @@ time_horizon:
 
 calc_emissions:
   countries:
-    directory: data/calc_emissions/countries
+    directory: data/calc_emissions/configs
     pattern: config_{name}.yaml
-    aggregate_output_directory: resources/All_countries
-    aggregate_results_directory: results/emissions/All_countries
+    aggregate_output_directory: results/emissions/All_countries
+    aggregate_results_directory:
+    resources_root: results/emissions
     demand_scenarios:
-    # custom_example
+      - base_demand
+      - scen1_lower
+      - scen1_mean
+      - scen1_upper
     mix_scenarios:
-    # Scenarios here should list mix scenario NAMES (the top-level mix keys
-    # from each country config). Use the three standard mixes we now expect:
-      - Reference
+      - base_mix
       - WEM
       - WAM
-    #  - custom_example
+    baseline_demand_case: base_demand
 
 climate_module:
   output_directory: results/climate  # Directory for climate results (relative to repository root).
-  resource_directory: resources/climate  # Copy of temperature outputs used as shared resources across modules.
+  resource_directory: results/climate  # Copy of temperature outputs used as shared resources across modules.
   sample_years_option: default  # 'default' (5-year steps to 2050, then 10-year) or 'full'.
-  emission_timeseries_directory: resources/All_countries  # Folder containing <scenario>/co2.csv (Mt CO₂/yr; output from calc_emissions aggregation).
+  emission_timeseries_directory: results/emissions/All_countries  # Folder containing <scenario>/co2.csv (Mt CO₂/yr; output from calc_emissions aggregation).
   parameters:
     # Time grid inherits from time_horizon and stretches to cover the SCC damage window.
     # Emission adjustments are held fixed at their terminal value when extrapolating past the reporting horizon.
@@ -146,16 +148,16 @@ economic_module:
     pulse:
       pulse_size_tco2: 1000000.0
   data_sources:
-    emission_root: resources/All_countries
-    temperature_root: resources/climate
+    emission_root: results/emissions/All_countries
+    temperature_root: results/climate
     climate_scenarios:
       - ssp119
       - ssp245
       - ssp370
-  reference_scenario: baseline
+  reference_scenario: base_mix__base_demand
   evaluation_scenarios:
-    - scenario_1_lower_bound
-    - scenario_1_upper_bound
+    - base_mix__scen1_lower
+    - base_mix__scen1_upper
   base_year: 2025
   damage_duration_years: 450
   aggregation: per_year
@@ -194,6 +196,9 @@ results:
     years:
       - 2030
       - 2050
+    year_period: #to report air pollution mortality and damages over a period as a sum
+      - start: 2025
+        end: 2050
     output_directory: results/summary
     include_plots: true
     plot_format: png

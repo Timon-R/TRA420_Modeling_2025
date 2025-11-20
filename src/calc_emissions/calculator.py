@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from config_paths import apply_results_run_directory
+from .constants import BASE_DEMAND_CASE, POLLUTANTS
 
 LOGGER = logging.getLogger("calc_emissions")
 if not LOGGER.handlers:
@@ -28,61 +28,9 @@ LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
 
-POLLUTANTS: dict[str, dict[str, object]] = {
-    "co2": {
-        "aliases": {
-            "co2_mt_per_twh": 1.0,
-            "co2_kt_per_twh": 1e-3,
-            "co2_gwh": 1e-3,  # legacy typo support
-            "co2_kg_per_mwh": 1.0,
-            "co2_kg_per_kwh": 1.0,
-            "co2_g_per_kwh": 1e-6,
-        },
-        "unit": "Mt",
-    },
-    "sox": {
-        "aliases": {
-            "sox_mt_per_twh": 1.0,
-            "sox_kt_per_twh": 1e-3,
-            "sox_kg_per_mwh": 1.0,
-            "sox_kg_per_kwh": 1.0,
-            "sox_g_per_kwh": 1e-6,
-            "so2_kt_per_twh": 1e-3,
-            "so2_kg_per_kwh": 1.0,
-        },
-        "unit": "Mt",
-    },
-    "nox": {
-        "aliases": {
-            "nox_mt_per_twh": 1.0,
-            "nox_kt_per_twh": 1e-3,
-            "nox_kg_per_mwh": 1.0,
-            "nox_kg_per_kwh": 1.0,
-            "nox_g_per_kwh": 1e-6,
-        },
-        "unit": "Mt",
-    },
-    "pm25": {
-        "aliases": {
-            "pm25_mt_per_twh": 1.0,
-            "pm25_kt_per_twh": 1e-3,
-            "pm25_kg_per_mwh": 1.0,
-            "pm25_kg_per_kwh": 1.0,
-            "pm25_g_per_kwh": 1e-6,
-        },
-        "unit": "Mt",
-    },
-    "gwp100": {
-        "aliases": {
-            "gwp100_mt_per_twh": 1.0,
-            "gwp100_kt_per_twh": 1e-3,
-            "gwp100_kg_per_mwh": 1.0,
-            "gwp100_kg_per_kwh": 1.0,
-            "gwp100_g_per_kwh": 1e-6,
-        },
-        "unit": "Mt CO2eq",
-    },
-}
+def compose_scenario_name(demand_case: str, mix_case: str) -> str:
+    """Return the canonical scenario identifier."""
+    return f"{mix_case}__{demand_case}"
 
 
 @dataclass
@@ -90,6 +38,8 @@ class EmissionScenarioResult:
     """Result container for an emission scenario."""
 
     name: str
+    demand_case: str
+    mix_case: str
     years: list[int]
     demand_twh: pd.Series
     generation_twh: pd.DataFrame
@@ -103,6 +53,8 @@ def run_from_config(
     *,
     default_years: Mapping[str, float | int] | None = None,
     results_run_directory: str | None = None,
+    allowed_demand_cases: Sequence[str] | None = None,
+    allowed_mix_cases: Sequence[str] | None = None,
 ) -> dict[str, EmissionScenarioResult]:
     """Run emission calculations based on ``config.yaml`` and write delta CSVs."""
     from config_paths import get_config_path  # local import to avoid cycle
@@ -119,10 +71,7 @@ def run_from_config(
     if fallback_years is None:
         fallback_years = _discover_global_horizon(config_path)
     years = _generate_years(module_cfg.get("years"), fallback_years)
-    # Emission factors must be taken from the repository-wide
-    # data/calc_emissions/emission_factors directory. Country configs should
-    # reference a filename (or relative path) but we will resolve to the
-    # canonical directory and load the basename only.
+
     ef_setting = module_cfg.get("emission_factors_file")
     if not ef_setting:
         raise ValueError(
@@ -145,97 +94,95 @@ def run_from_config(
         )
     emission_factors = _load_emission_factors(existing)
 
-    # Gather demand scenarios. Support both the new map-based `demand_scenarios`
-    # *and* the legacy pattern where a top-level `baseline` and a `scenarios`
-    # list provide demand_custom/mix_custom entries. Work on a local copy to
-    # avoid mutating the original config.
-    raw_demand_scenarios = module_cfg.get("demand_scenarios", {}) or {}
-    demand_scenarios: dict[str, Mapping] = {}
-
-    # If no explicit demand_scenarios map is provided, try to synthesise one
-    # from legacy `baseline` and `scenarios` entries (used in older configs
-    # and by some unit tests).
-    if not raw_demand_scenarios:
-        # baseline block may contain demand_custom or a pointer to a named scenario
-        baseline_block = module_cfg.get("baseline") or {}
-        if isinstance(baseline_block, Mapping):
-            if "demand_custom" in baseline_block:
-                demand_scenarios["baseline"] = {"values": baseline_block["demand_custom"]}
-            elif "demand_scenario" in baseline_block:
-                # leave resolution to _resolve_demand_series later if needed
-                pass
-
-        for sc in module_cfg.get("scenarios", []) or []:
-            if not isinstance(sc, Mapping):
+    not bool(module_cfg.get("demand_scenarios"))
+    demand_scenarios = module_cfg.get("demand_scenarios") or {}
+    if not isinstance(demand_scenarios, Mapping) or not demand_scenarios:
+        demand_scenarios = {}
+        baseline_cfg = module_cfg.get("baseline", {})
+        baseline_values = (
+            baseline_cfg.get("demand_custom") if isinstance(baseline_cfg, Mapping) else None
+        )
+        baseline_case = (
+            str(module_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip()
+            or BASE_DEMAND_CASE
+        )
+        if isinstance(baseline_values, Mapping) and baseline_values:
+            demand_scenarios[baseline_case] = {"values": dict(baseline_values)}
+        for scenario in module_cfg.get("scenarios", []) or []:
+            if not isinstance(scenario, Mapping):
                 continue
-            name = sc.get("name")
-            if not name:
+            name = scenario.get("name")
+            demand_custom = scenario.get("demand_custom")
+            if not name or not isinstance(demand_custom, Mapping):
                 continue
-            if "demand_custom" in sc:
-                demand_scenarios[name] = {"values": sc["demand_custom"]}
-            elif "demand_scenario" in sc:
-                # reference to an existing demand scenario; leave handling to resolver
-                demand_scenarios[name] = {"values": {}}
-    else:
-        for k, v in raw_demand_scenarios.items():
-            key = "baseline" if k == "reference" else k
-            if key in demand_scenarios:
-                raise ValueError(f"Duplicate demand scenario name after renaming: {key}")
-            demand_scenarios[key] = v
-
-    # Mix scenarios: prefer explicit `mix_scenarios` map, but synthesize from
-    # legacy `baseline`/`scenarios` mix_custom entries when absent.
-    mix_scenarios = module_cfg.get("mix_scenarios") or {}
-    if not mix_scenarios:
-        synthesized: dict[str, Mapping] = {}
-        baseline_block = module_cfg.get("baseline") or {}
-        if isinstance(baseline_block, Mapping) and "mix_custom" in baseline_block:
-            synthesized["baseline"] = baseline_block["mix_custom"]
-        for sc in module_cfg.get("scenarios", []) or []:
-            if isinstance(sc, Mapping) and sc.get("name") and "mix_custom" in sc:
-                synthesized[sc["name"]] = sc["mix_custom"]
-        if synthesized:
-            mix_scenarios = synthesized
-
-    output_dir = Path(module_cfg.get("output_directory", "resources"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    results_dir = apply_results_run_directory(
-        Path(module_cfg.get("results_directory", "results/emissions")),
-        results_run_directory,
+            demand_scenarios[str(name)] = {"values": dict(demand_custom)}
+        if not demand_scenarios:
+            raise ValueError("'demand_scenarios' must define at least one demand case.")
+    demand_scenarios = dict(demand_scenarios)
+    _maybe_add_mean_demand_case(demand_scenarios)
+    if allowed_demand_cases:
+        allowed = [str(case).strip() for case in allowed_demand_cases if str(case).strip()]
+        missing = [case for case in allowed if case not in demand_scenarios]
+        if missing:
+            raise KeyError(f"Demand scenarios missing required cases: {missing}")
+        demand_scenarios = {case: demand_scenarios[case] for case in allowed}
+    baseline_case = (
+        str(module_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
-    results_dir.mkdir(parents=True, exist_ok=True)
+    if baseline_case not in demand_scenarios:
+        raise ValueError(
+            f"Demand scenarios must include '{baseline_case}'. "
+            "Set calc_emissions.baseline_demand_case if a different label is required."
+        )
 
-    # Results keys will be of the form '<mix_name>/<demand_name>' so callers can
-    # easily discover emissions grouped by mix. We also write outputs under
-    # output_dir/<mix_name>/<demand_name> with CSVs containing both absolute
-    # emissions and delta vs the mix-specific demand baseline.
+    synthetic_mix = not bool(module_cfg.get("mix_scenarios"))
+    scenario_mix_overrides: dict[str, Mapping[str, float]] = {}
+    mix_scenarios = module_cfg.get("mix_scenarios") or {}
+    if not isinstance(mix_scenarios, Mapping) or not mix_scenarios:
+        mix_scenarios = {}
+        baseline_cfg = module_cfg.get("baseline", {})
+        baseline_mix = baseline_cfg.get("mix_custom") if isinstance(baseline_cfg, Mapping) else None
+        baseline_shares = None
+        if isinstance(baseline_mix, Mapping) and baseline_mix:
+            baseline_shares = baseline_mix.get("shares", baseline_mix)
+        if baseline_shares:
+            mix_scenarios["baseline_mix"] = {"shares": baseline_shares}
+        for scenario in module_cfg.get("scenarios", []) or []:
+            if not isinstance(scenario, Mapping):
+                continue
+            name = scenario.get("name")
+            mix_custom = scenario.get("mix_custom")
+            if not name or not isinstance(mix_custom, Mapping):
+                continue
+            shares = mix_custom.get("shares", mix_custom)
+            if shares:
+                scenario_mix_overrides[str(name)] = shares
+        if not mix_scenarios:
+            raise ValueError("'mix_scenarios' must define at least one mix case.")
+    if allowed_mix_cases:
+        allowed = [str(case).strip() for case in allowed_mix_cases if str(case).strip()]
+        missing = [case for case in allowed if case not in mix_scenarios]
+        if missing:
+            raise KeyError(f"Mix scenarios missing required cases: {missing}")
+        mix_scenarios = {case: mix_scenarios[case] for case in allowed}
+
     results: dict[str, EmissionScenarioResult] = {}
-
-    if "baseline" not in demand_scenarios:
-        raise ValueError("A demand scenario named 'baseline' (or 'reference') must be provided.")
+    per_mix_results: dict[str, dict[str, EmissionScenarioResult]] = {}
 
     for mix_name in mix_scenarios:
         LOGGER.info("Calculating mix scenario '%s'", mix_name)
-
-        # Resolve mix shares once per mix. Support two mix types:
-        #  - standard 'shares' mapping (handled by _resolve_mix_shares)
-        #  - time-series mixes with 'type: timeseries' and a 'csv' path
         mix_cfg = mix_scenarios.get(mix_name, {})
         if isinstance(mix_cfg, dict) and mix_cfg.get("type") == "timeseries" and "csv" in mix_cfg:
-            # Load the timeseries CSV and align to reporting years
             mix_csv_path = _locate_mix_csv(config_path, mix_cfg["csv"])
-            mix_ts = _load_mix_timeseries(mix_csv_path)  # indexed by year
-            # normalize column names to lower-case technology keys
+            mix_ts = _load_mix_timeseries(mix_csv_path)
             mix_ts.columns = [c.strip().lower() for c in mix_ts.columns.astype(str)]
-            # Reindex to requested years and ensure all technologies from
-            # emission_factors are present
-            mix_ts = mix_ts.reindex(years).fillna(0.0)
+            mix_ts = mix_ts.reindex(years)
+            mix_ts = mix_ts.ffill().bfill()
+            mix_ts = mix_ts.fillna(0.0)
             for t in emission_factors.index:
                 if t not in mix_ts.columns:
                     mix_ts[t] = 0.0
             mix_ts = mix_ts[list(emission_factors.index)]
-            # Normalize per-year to sum to 1 (avoid division by zero)
             mix_ts = mix_ts.div(mix_ts.sum(axis=1).replace(0, 1.0), axis=0)
             mix_shares = mix_ts
         else:
@@ -247,153 +194,51 @@ def run_from_config(
                 None,
             )
 
-        # Compute baseline emissions for this mix (demand baseline)
-        baseline_demand = _resolve_demand_series(years, demand_scenarios, "baseline", None)
-        calculate_emissions(
-            name=f"{mix_name}/baseline",
-            demand_series=baseline_demand,
-            mix_shares=mix_shares,
-            emission_factors=emission_factors,
-        )
-
-        # Iterate through all demand scenarios (baseline, upper_bound, lower_bound, ...)
+        per_mix_results[mix_name] = {}
         for demand_name in demand_scenarios:
             LOGGER.info("  • demand case '%s'", demand_name)
             demand_series = _resolve_demand_series(years, demand_scenarios, demand_name, None)
+            mix_shares_current = mix_shares
+            if synthetic_mix and demand_name in scenario_mix_overrides:
+                mix_shares_current = _resolve_mix_shares(
+                    years,
+                    {mix_name: {"shares": scenario_mix_overrides[demand_name]}},
+                    emission_factors.index,
+                    mix_name,
+                    None,
+                )
+            scenario_id = compose_scenario_name(demand_name, mix_name)
             scenario_result = calculate_emissions(
-                name=f"{mix_name}/{demand_name}",
+                name=scenario_id,
                 demand_series=demand_series,
-                mix_shares=mix_shares,
+                mix_shares=mix_shares_current,
                 emission_factors=emission_factors,
+                demand_case=demand_name,
+                mix_case=mix_name,
             )
+            per_mix_results[mix_name][demand_name] = scenario_result
+            results[scenario_id] = scenario_result
 
-            results[f"{mix_name}/{demand_name}"] = scenario_result
-
-    # After computing all mix/demand scenario results, write per-mix pollutant CSVs
-    # with columns for the baseline absolute and other demand cases plus deltas.
-    # Files are written to output_dir/<mix_name>/<pollutant>.csv and likewise to
-    # results_dir when configured.
-    # Group results by mix
-    mixes: dict[str, dict[str, EmissionScenarioResult]] = {}
-    for key, res in results.items():
-        if "/" not in key:
-            continue
-        mix, demand = key.split("/", 1)
-        mixes.setdefault(mix, {})[demand] = res
-
-    for mix_name, demand_map in mixes.items():
-        mix_dir = output_dir / mix_name
-        mix_dir.mkdir(parents=True, exist_ok=True)
-        mix_results_dir = results_dir / mix_name
-        mix_results_dir.mkdir(parents=True, exist_ok=True)
-
-        # Determine baseline series for alignment
-        baseline_res = demand_map.get("baseline")
-
-        for pollutant in set().union(*(r.total_emissions_mt.keys() for r in demand_map.values())):
-            unit = POLLUTANTS.get(pollutant, {}).get("unit", "")
-
-            # Prepare columns: absolute_baseline, absolute_<demand>, delta_<demand>...
-            cols = ["year"]
-            abs_cols = {}
-            for demand_name in demand_map:
-                abs_name = f"absolute_{demand_name}"
-                abs_cols[demand_name] = abs_name
-                cols.append(abs_name)
-            delta_cols = [f"delta_{d}" for d in demand_map if d != "baseline"]
-            cols.extend(delta_cols)
-
-            # Use baseline index when available, otherwise union of indexes
-            if baseline_res is not None and pollutant in baseline_res.total_emissions_mt:
-                index = baseline_res.total_emissions_mt[pollutant].index
-            else:
-                # union of all indices
-                idxs = [
-                    s.total_emissions_mt.get(pollutant).index
-                    for s in demand_map.values()
-                    if pollutant in s.total_emissions_mt
-                ]
-                if not idxs:
-                    continue
-                index = idxs[0]
-                for i in idxs[1:]:
-                    index = index.union(i)
-
-            data = {"year": list(map(int, index))}
-            # Fill absolute columns
-            for demand_name, abs_name in abs_cols.items():
-                series = demand_map[demand_name].total_emissions_mt.get(pollutant)
-                if series is None:
-                    series_aligned = pd.Series([0.0] * len(index), index=index)
-                else:
-                    series_aligned = series.reindex(index, fill_value=0.0)
-                data[abs_name] = list(series_aligned.values)
-
-            # Compute deltas vs baseline
-            baseline_series = None
-            if baseline_res is not None:
-                baseline_series = baseline_res.total_emissions_mt.get(pollutant)
-                if baseline_series is not None:
-                    baseline_series = baseline_series.reindex(index, fill_value=0.0)
-
-            for demand_name in [d for d in demand_map if d != "baseline"]:
-                abs_series = pd.Series(data[abs_cols[demand_name]], index=index)
-                if baseline_series is None:
-                    delta = abs_series * 0.0
-                else:
-                    delta = abs_series - baseline_series
-                data[f"delta_{demand_name}"] = list(delta.values)
-
-            df = pd.DataFrame(data)[cols]
-
-            # Write with a commented unit line
-            out_file = mix_dir / f"{pollutant}.csv"
-            with out_file.open("w", encoding="utf-8") as fh:
-                if unit:
-                    fh.write(f"# unit: {unit}\n")
-                df.to_csv(fh, index=False)
-
-            results_out_file = mix_results_dir / f"{pollutant}.csv"
-            with results_out_file.open("w", encoding="utf-8") as fh:
-                if unit:
-                    fh.write(f"# unit: {unit}\n")
-                df.to_csv(fh, index=False)
-
-    # Back-compatibility: some downstream code and tests expect top-level
-    # scenario keys (e.g. 'baseline', 'policy') rather than the new
-    # '<mix>/<demand>' convention. If the config used legacy `baseline`/
-    # `scenarios` entries (or we synthesised them above), expose flat keys
-    # that point to the corresponding '<name>/<name>' result when present.
-    if module_cfg.get("baseline") or module_cfg.get("scenarios"):
-        for scen in list(demand_scenarios.keys()):
-            compound = f"{scen}/{scen}"
-            if compound in results and scen not in results:
-                results[scen] = results[compound]
-
-    # Also write legacy per-scenario CSVs at output_dir/<scenario>/<pollutant>.csv
-    # containing only 'year' and 'delta' columns so older consumers/tests can
-    # read the simple delta timeseries.
-    if module_cfg.get("baseline") or module_cfg.get("scenarios"):
-        baseline_res = results.get("baseline")
-        for scen in demand_scenarios:
-            res = results.get(scen)
-            if res is None:
+        _assign_mix_deltas(per_mix_results[mix_name], baseline_case, years)
+    if synthetic_mix:
+        # Provide alias keys using demand-case names for compatibility with consumers
+        for res in list(results.values()):
+            alias = res.demand_case
+            if alias in results:
                 continue
-            scen_dir = output_dir / scen
-            scen_dir.mkdir(parents=True, exist_ok=True)
-            for pollutant, totals in res.total_emissions_mt.items():
-                if baseline_res is not None:
-                    base = baseline_res.total_emissions_mt.get(pollutant)
-                    if base is not None:
-                        base_aligned = base.reindex(totals.index, fill_value=0.0)
-                        delta = totals.reindex(base_aligned.index, fill_value=0.0) - base_aligned
-                    else:
-                        delta = totals * 0.0
-                else:
-                    delta = totals * 0.0
-                df = pd.DataFrame({"year": totals.index.astype(int), "delta": delta.values})
-                df.to_csv(scen_dir / f"{pollutant}.csv", index=False)
-
+            results[alias] = EmissionScenarioResult(
+                name=alias,
+                demand_case=res.demand_case,
+                mix_case=res.mix_case,
+                years=list(res.years),
+                demand_twh=res.demand_twh.copy(),
+                generation_twh=res.generation_twh.copy(),
+                technology_emissions_mt={
+                    k: df.copy() for k, df in res.technology_emissions_mt.items()
+                },
+                total_emissions_mt={k: s.copy() for k, s in res.total_emissions_mt.items()},
+                delta_mtco2=res.delta_mtco2.copy(),
+            )
     return results
 
 
@@ -402,6 +247,9 @@ def calculate_emissions(
     demand_series: pd.Series,
     mix_shares: pd.DataFrame,
     emission_factors: pd.DataFrame,
+    *,
+    demand_case: str,
+    mix_case: str,
 ) -> EmissionScenarioResult:
     """Calculate generation and emissions for a single scenario."""
     if not isinstance(demand_series.index, pd.Index):
@@ -430,6 +278,8 @@ def calculate_emissions(
 
     return EmissionScenarioResult(
         name=name,
+        demand_case=demand_case,
+        mix_case=mix_case,
         years=list(demand_series.index.astype(int)),
         demand_twh=demand_series,
         generation_twh=generation,
@@ -439,6 +289,81 @@ def calculate_emissions(
             np.zeros_like(co2_series.values), index=co2_series.index, dtype=float
         ),
     )
+
+
+def _assign_mix_deltas(
+    demand_map: Mapping[str, EmissionScenarioResult],
+    baseline_case: str,
+    years: Sequence[int],
+) -> None:
+    baseline_res = demand_map.get(baseline_case)
+    if baseline_res is None:
+        raise ValueError(f"Missing baseline demand '{baseline_case}' for mix.")
+    baseline_co2 = baseline_res.total_emissions_mt.get("co2")
+    if baseline_co2 is None:
+        index = pd.Index([int(y) for y in years])
+        baseline_co2 = pd.Series(np.zeros(len(index)), index=index, dtype=float)
+        baseline_res.total_emissions_mt["co2"] = baseline_co2
+
+    for scenario in demand_map.values():
+        totals = scenario.total_emissions_mt.get("co2")
+        if totals is None:
+            totals = pd.Series(np.zeros(len(baseline_co2)), index=baseline_co2.index, dtype=float)
+        else:
+            totals = totals.reindex(baseline_co2.index, fill_value=0.0)
+        scenario.total_emissions_mt["co2"] = totals
+        scenario.delta_mtco2 = totals - baseline_co2
+
+
+def _maybe_add_mean_demand_case(demand_scenarios: dict[str, Mapping[str, object]]) -> None:
+    lower = demand_scenarios.get("scen1_lower")
+    upper = demand_scenarios.get("scen1_upper")
+    mean_key = "scen1_mean"
+    if mean_key in demand_scenarios or lower is None or upper is None:
+        return
+    lower_values = lower.get("values")
+    upper_values = upper.get("values")
+    if not isinstance(lower_values, Mapping) or not isinstance(upper_values, Mapping):
+        return
+    averaged = _average_demand_maps(lower_values, upper_values)
+    if not averaged:
+        return
+    demand_scenarios[mean_key] = {
+        "description": "Average of scen1_lower and scen1_upper demand cases.",
+        "values": averaged,
+    }
+
+
+def _average_demand_maps(
+    lower: Mapping[str, float | int],
+    upper: Mapping[str, float | int],
+) -> dict[int, float]:
+    normalized_lower = _normalize_demand_map(lower)
+    normalized_upper = _normalize_demand_map(upper)
+    combined_years = sorted(set(normalized_lower) | set(normalized_upper))
+    averaged: dict[int, float] = {}
+    for year in combined_years:
+        lower_val = normalized_lower.get(year)
+        upper_val = normalized_upper.get(year)
+        if lower_val is None and upper_val is None:
+            continue
+        if lower_val is None:
+            averaged[year] = upper_val  # type: ignore[assignment]
+        elif upper_val is None:
+            averaged[year] = lower_val
+        else:
+            averaged[year] = (lower_val + upper_val) / 2.0
+    return averaged
+
+
+def _normalize_demand_map(values: Mapping[str, float | int]) -> dict[int, float]:
+    normalized: dict[int, float] = {}
+    for key, value in values.items():
+        try:
+            normalized[int(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return normalized
 
 
 def _discover_global_horizon(config_path: Path) -> Mapping[str, float | int] | None:

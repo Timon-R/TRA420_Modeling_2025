@@ -1,6 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/countries/emission_factors_North_Macedonia.csv
-  output_directory: resources/calc_emissions/North_Macedonia
+  output_directory: results/emissions/countries/North_Macedonia
   demand_scenarios:
     reference:
       description: North Macedonia reference demand (TWh).

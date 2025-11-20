@@ -8,8 +8,8 @@ python scripts/run_fair_scenarios.py
 
 Configuration lives in ``config.yaml`` under the ``climate_module`` section:
 
-- ``emission_timeseries_directory`` – directory containing subfolders like
-  ``resources/<scenario>/co2.csv`` (values in Mt CO₂/yr) produced by the
+- ``emission_timeseries_directory`` – directory containing mix folders like
+  ``results/emissions/All_countries/<mix>/co2.csv`` (values in Mt CO₂/yr) produced by the
   ``calc_emissions`` workflow. The runner automatically detects each folder
   unless ``emission_scenarios.run`` restricts the list.
 - ``climate_scenarios`` – SSP pathways to evaluate (``run: all`` or explicit list).
@@ -19,14 +19,14 @@ Configuration lives in ``config.yaml`` under the ``climate_module`` section:
 Output
 ------
 For every combination of emission scenario and climate pathway the script writes a
-CSV to ``results/climate/<emission>_<climate>.csv`` (archival result) and to
-``resources/climate/<emission>_<climate>.csv`` (shared input for downstream modules).
+CSV to ``results/climate/<emission>_<climate>.csv`` and (optionally) mirrors it to
+``results/climate/<emission>_<climate>.csv`` for downstream modules.
 It also prints a summary table with 2030, 2050 and 2100 temperatures/deltas.
 
 Emission time series
 --------------------
 Emission differences are expressed in **Mt CO₂ per year** (derived from the CSVs in
-``resources/``). The runner converts them to Gt CO₂ before passing them to FaIR. If
+``results/``). The runner converts them to Gt CO₂ before passing them to FaIR. If
 you want to prescribe a custom trajectory inside the config instead of using the
 detected CSV, pass an array with the same length (and ordering) as the FaIR
 timepoints returned by
@@ -57,6 +57,12 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from calc_emissions import BASE_DEMAND_CASE
+from calc_emissions.scenario_io import (
+    list_available_scenarios,
+    load_scenario_delta,
+    split_scenario_name,
+)
 from climate_module import DEFAULT_TIME_CONFIG, ScenarioSpec, run_scenarios, step_change
 from climate_module.calibration import FairCalibration, load_fair_calibration
 from config_paths import (
@@ -79,6 +85,16 @@ def _load_config() -> dict:
 
 ROOT_CONFIG = _load_config()
 CONFIG = ROOT_CONFIG.get("climate_module", {})
+
+COUNTRIES_CFG = ROOT_CONFIG.get("calc_emissions", {}).get("countries", {}) or {}
+BASELINE_DEMAND_CASE = (
+    str(COUNTRIES_CFG.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
+)
+DEMAND_CASES = COUNTRIES_CFG.get("demand_scenarios") or [BASELINE_DEMAND_CASE]
+MIX_FILTER = COUNTRIES_CFG.get("mix_scenarios") or []
+SCENARIO_DEMAND_CASES = [case for case in DEMAND_CASES if case != BASELINE_DEMAND_CASE]
+if not SCENARIO_DEMAND_CASES:
+    SCENARIO_DEMAND_CASES = DEMAND_CASES
 TIME_HORIZON = ROOT_CONFIG.get("time_horizon", {})
 ECONOMIC_CFG = ROOT_CONFIG.get("economic_module", {})
 RESULTS_RUN_DIRECTORY = get_results_run_directory(ROOT_CONFIG)
@@ -140,7 +156,7 @@ SUMMARY_CANDIDATES = {2030, 2050, 2100, int(round(CLIMATE_END))}
 SUMMARY_YEARS = sorted(year for year in SUMMARY_CANDIDATES if CLIMATE_START <= year <= CLIMATE_END)
 
 # Emission label used as the reference/baseline in downstream modules. We keep
-# the baseline CSVs in resources/ (consumed by SCC), but avoid duplicating them
+# the baseline CSVs in results (consumed by SCC), but avoid duplicating them
 # in results/climate since each scenario CSV already contains a baseline column.
 REFERENCE_EMISSION_LABEL = str(ECONOMIC_CFG.get("reference_scenario", "baseline"))
 
@@ -179,10 +195,28 @@ _OUTPUT_DIR_ABS = _OUTPUT_DIR_CFG if _OUTPUT_DIR_CFG.is_absolute() else (ROOT / 
 OUTPUT_DIR = apply_results_run_directory(_OUTPUT_DIR_ABS, RESULTS_RUN_DIRECTORY, repo_root=ROOT)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-RESOURCE_DIR = ROOT / CONFIG.get("resource_directory", "resources/climate")
+_RESOURCE_DIR_CFG = Path(CONFIG.get("resource_directory", "results/climate"))
+_RESOURCE_DIR_ABS = (
+    _RESOURCE_DIR_CFG if _RESOURCE_DIR_CFG.is_absolute() else (ROOT / _RESOURCE_DIR_CFG)
+)
+RESOURCE_DIR = apply_results_run_directory(
+    _RESOURCE_DIR_ABS,
+    RESULTS_RUN_DIRECTORY,
+    repo_root=ROOT,
+)
 RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
-EMISSION_DIR = ROOT / CONFIG.get("emission_timeseries_directory", "resources")
+_EMISSION_DIR_CFG = Path(
+    CONFIG.get("emission_timeseries_directory", "results/emissions/All_countries")
+)
+_EMISSION_DIR_ABS = (
+    _EMISSION_DIR_CFG if _EMISSION_DIR_CFG.is_absolute() else (ROOT / _EMISSION_DIR_CFG)
+)
+EMISSION_DIR = apply_results_run_directory(
+    _EMISSION_DIR_ABS,
+    RESULTS_RUN_DIRECTORY,
+    repo_root=ROOT,
+)
 EMISSION_DIR.mkdir(parents=True, exist_ok=True)
 
 SUMMARY_CFG = ROOT_CONFIG.get("results", {}).get("summary", {}) or {}
@@ -201,19 +235,19 @@ def _discover_emission_map() -> dict[str, Path]:
     mapping: dict[str, Path] = {}
     if not EMISSION_DIR.exists():
         return mapping
-    for mix_dir in sorted(EMISSION_DIR.iterdir()):
-        if not mix_dir.is_dir():
+    available = list_available_scenarios(
+        EMISSION_DIR,
+        DEMAND_CASES,
+        include_baseline=True,
+        baseline_case=BASELINE_DEMAND_CASE,
+    )
+    for scenario_name in available:
+        mix_case, demand_case = split_scenario_name(scenario_name)
+        if MIX_FILTER and mix_case not in MIX_FILTER:
             continue
-        direct = mix_dir / "co2.csv"
-        if direct.exists():
-            mapping[mix_dir.name] = mix_dir
+        if demand_case != BASELINE_DEMAND_CASE and demand_case not in SCENARIO_DEMAND_CASES:
             continue
-        for demand_dir in sorted(mix_dir.iterdir()):
-            if not demand_dir.is_dir():
-                continue
-            if (demand_dir / "co2.csv").exists():
-                scenario_name = f"{mix_dir.name}/{demand_dir.name}"
-                mapping[scenario_name] = demand_dir
+        mapping[scenario_name] = (EMISSION_DIR / mix_case).resolve()
     return mapping
 
 
@@ -251,11 +285,17 @@ def build_scenarios() -> list[ScenarioSpec]:
     specs: list[ScenarioSpec] = []
     for emission_name in selected_emissions:
         emission_dir = emission_map[emission_name]
+        mix_case, demand_case = split_scenario_name(emission_name)
         default_co2 = emission_dir / "co2.csv"
         if not default_co2.exists():
-            raise FileNotFoundError(
-                f"Missing co2.csv for emission scenario '{emission_name}' in {emission_dir}"
-            )
+            raise FileNotFoundError(f"Missing co2.csv for mix '{mix_case}' in {emission_dir}")
+        delta_frame = load_scenario_delta(
+            EMISSION_DIR,
+            emission_name,
+            baseline_case=BASELINE_DEMAND_CASE,
+        )
+        scenario_years = delta_frame["year"].to_numpy(dtype=float)
+        scenario_deltas = delta_frame["delta"].to_numpy(dtype=float)
 
         for climate_id in SELECTED_CLIMATE_IDS:
             definition = CLIMATE_DEFS[climate_id]
@@ -277,10 +317,11 @@ def build_scenarios() -> list[ScenarioSpec]:
                             csv_candidate = (ROOT / csv_candidate).resolve()
                     csv_path = csv_candidate
                 else:
-                    csv_path = default_co2
-                adjustments = {specie: _timeseries_adjustment(csv_path)}
-            else:
-                csv_path = None
+                    adjustments = {
+                        specie: _timeseries_adjustment_from_series(scenario_years, scenario_deltas)
+                    }
+                if csv_override:
+                    adjustments = {specie: _timeseries_adjustment(csv_path)}
 
             delta = definition.get("adjustment_delta")
             start_delta_year = definition.get("adjustment_start_year", DEFAULT_ADJUSTMENT_START)
@@ -336,7 +377,7 @@ def _write_csv(label: str, climate_scenario: str, result) -> None:
     )
     # Avoid writing redundant baseline CSVs to results/climate; the baseline
     # temperature path is already included as a column in every scenario file.
-    # Still mirror the full CSV to resources/climate for downstream consumers.
+    # Still mirror the full CSV to the configured resource directory for downstream consumers.
     if not label.startswith(f"{REFERENCE_EMISSION_LABEL}_"):
         output_path = OUTPUT_DIR / f"{label}.csv"
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -347,19 +388,15 @@ def _write_csv(label: str, climate_scenario: str, result) -> None:
 
 
 def _print_summary(label: str, result) -> None:
+    # Quiet the per-scenario table; keep a compact one-line debug for traceability.
     years = result.years
     indices = [int(np.argmin(np.abs(years - year))) for year in SUMMARY_YEARS]
-    header = (
-        f"\n=== {label} ===\n"
-        "  Year | Baseline (°C) | Adjusted (°C) | Delta (°C)\n"
-        "  -----+----------------+----------------+-----------"
-    )
-    rows = [
-        f"  {int(years[idx]):4d} | {result.baseline[idx]:14.2f} | "
-        f"{result.adjusted[idx]:14.2f} | {result.delta[idx]:9.2f}"
-        for idx in indices
-    ]
-    LOGGER.info("%s\n%s", header, "\n".join(rows))
+    rows = []
+    for idx in indices:
+        year = int(years[idx])
+        delta = float(result.delta[idx])
+        rows.append(f"{year}:{delta:+.2f}C")
+    LOGGER.debug("Climate summary %s -> %s", label, ", ".join(rows))
 
 
 def _sampling_mask(years: np.ndarray) -> np.ndarray:
@@ -395,6 +432,15 @@ def _timeseries_adjustment(rel_path: Path):
             len(timepoints),
         )
         return mt_values / 1000.0
+
+    return builder
+
+
+def _timeseries_adjustment_from_series(years: np.ndarray, deltas: np.ndarray):
+    def builder(timepoints: np.ndarray, cfg: dict[str, float]) -> np.ndarray:
+        offset = cfg.get("timestep", 1.0) / 2
+        values = np.interp(timepoints, years + offset, deltas, left=deltas[0], right=deltas[-1])
+        return values / 1000.0
 
     return builder
 
@@ -448,7 +494,9 @@ def _export_background_products() -> None:
     df = df.sort_values(["climate_scenario", "year"]).reset_index(drop=True)
     full_csv = OUTPUT_DIR / "background_climate_full.csv"
     df.to_csv(full_csv, index=False)
-    shutil.copyfile(full_csv, RESOURCE_DIR / full_csv.name)
+    full_copy = RESOURCE_DIR / full_csv.name
+    if full_csv.resolve() != full_copy.resolve():
+        shutil.copyfile(full_csv, full_copy)
     plot_dir = SUMMARY_OUTPUT_DIR / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
     _plot_background(
@@ -462,7 +510,9 @@ def _export_background_products() -> None:
     if not horizon_df.empty:
         horizon_csv = OUTPUT_DIR / "background_climate_horizon.csv"
         horizon_df.to_csv(horizon_csv, index=False)
-        shutil.copyfile(horizon_csv, RESOURCE_DIR / horizon_csv.name)
+        horizon_copy = RESOURCE_DIR / horizon_csv.name
+        if horizon_csv.resolve() != horizon_copy.resolve():
+            shutil.copyfile(horizon_csv, horizon_copy)
         _plot_background(
             horizon_df,
             plot_dir / "background_climate_horizon.png",
