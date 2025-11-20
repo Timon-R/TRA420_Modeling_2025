@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: tra420-modeling
+Version: 0.1.0
+Summary: Pipeline for TRA420 energy-emissions-climate modeling
+Requires-Python: >=3.11
+License-File: LICENSE
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Dynamic: license-file
