@@ -8,8 +8,6 @@ from economic_module import (
     EconomicInputs,
     compute_damage_difference,
     compute_damages,
-    compute_scc_constant_discount,
-    compute_scc_ramsey_discount,
     damage_dice,
 )
 from economic_module.scc import (
@@ -69,46 +67,6 @@ def test_ramsey_discount_pipeline(sample_inputs: EconomicInputs):
     assert consumption_pc.shape == growth.shape
     factors = _ramsey_discount_factors(sample_inputs.years, 2025, growth, rho=0.01, eta=1.0)
     assert factors[0] == pytest.approx(1.0)
-
-
-def test_compute_scc_constant_discount(sample_inputs: EconomicInputs):
-    result = compute_scc_constant_discount(
-        sample_inputs,
-        scenario="policy",
-        reference="baseline",
-        base_year=2025,
-        discount_rate=0.03,
-        aggregation="average",
-        add_tco2=-2.0,
-        damage_kwargs={"delta2": 0.0},
-    )
-    assert not np.isnan(result.scc_usd_per_tco2)
-    per_year = result.per_year
-    assert "damage_attributed_usd" in per_year.columns
-    assert "discounted_damage_attributed_usd" in per_year.columns
-    np.testing.assert_allclose(
-        per_year["discounted_damage_attributed_usd"].sum(),
-        per_year["discounted_delta_usd"].sum(),
-    )
-    assert result.temperature_kernel is not None
-    assert result.temperature_kernel.shape[0] == len(per_year)
-    assert result.run_method == "kernel"
-
-
-def test_compute_scc_ramsey_discount(sample_inputs: EconomicInputs):
-    result = compute_scc_ramsey_discount(
-        sample_inputs,
-        scenario="policy",
-        reference="baseline",
-        base_year=2025,
-        rho=0.01,
-        eta=1.0,
-        aggregation="average",
-        add_tco2=-2.0,
-        damage_kwargs={"delta2": 0.0},
-    )
-    assert result.per_year["discount_factor"].iloc[0] == pytest.approx(1.0)
-    assert result.run_method == "kernel"
 
 
 def test_from_csv_automatically_loads_ssp_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

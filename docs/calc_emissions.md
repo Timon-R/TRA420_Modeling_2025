@@ -131,3 +131,10 @@ Each CSV has columns `year`, `absolute_<demand>`, and `delta_<demand>` for every
 This API is useful when creating custom orchestration or tests that need to
 produce the same per-country folder layout as the `scripts/run_calc_emissions_all.py`
 aggregator.
+
+## References
+ - [Emission factors and technology intensities]: Emission factors for CO2, NOx, SOx, PM2.5 and GWP100 for the different production technologies were taken from ecoinvent Version 3.10.1, Allocation cut-off by classification (cutoff) (Wernet et al., 2016) on a country basis. 
+ 
+Wernet, G., Bauer, C., Steubing, B., Reinhard, J., Moreno-Ruiz, E., and Weidema, B., 2016. The ecoinvent database version 3 (part I): overview and methodology. The International Journal of Life Cycle Assessment, [online] 21(9), pp.1218–1230. Available at: <http://link.springer.com/10.1007/s11367-016-1087-8> [Accessed 21 10 2025].
+
+[Electricity mix sources]: 

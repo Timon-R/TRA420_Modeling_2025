@@ -1,11 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_North_Macedonia.csv
   output_directory: results/emissions/North_Macedonia
-  years:
-    start: 2025
-    end: 2100
-    step: 5
-    
   # Demand cases processed for every mix (must contain 'base_demand')
   demand_scenarios:
     base_demand:

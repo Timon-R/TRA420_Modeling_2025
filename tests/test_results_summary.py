@@ -151,39 +151,26 @@ def test_build_summary_collects_metrics(tmp_path: Path):
 
     # SCC timeseries
     _write_csv(
-        root
-        / "results"
-        / "economic"
-        / "scc_timeseries_ramsey_discount_base_mix__policy_ssp245.csv",
+        root / "results" / "economic" / "pulse_scc_timeseries_ramsey_discount_ssp245.csv",
         [
             {
                 "year": 2030,
-                "delta_damage_usd": -5.0e9,
-                "delta_emissions_tco2": -1.0,
+                "discount_factor": 1.0,
+                "pv_damage_per_pulse_usd": -5.0e9,
                 "scc_usd_per_tco2": 50.0,
+                "pulse_size_tco2": 1_000_000,
+                "delta_emissions_tco2": -100_000_000.0,
                 "discounted_delta_usd": -5.0e9,
             },
             {
                 "year": 2050,
-                "delta_damage_usd": -7.5e9,
-                "delta_emissions_tco2": -0.8,
+                "discount_factor": 0.9,
+                "pv_damage_per_pulse_usd": -7.5e9,
                 "scc_usd_per_tco2": 60.0,
+                "pulse_size_tco2": 1_000_000,
+                "delta_emissions_tco2": -150_000_000.0,
                 "discounted_delta_usd": -7.5e9,
             },
-        ],
-    )
-
-    _write_csv(
-        root / "results" / "economic" / "scc_summary.csv",
-        [
-            {
-                "scenario": "base_mix__policy_ssp245",
-                "reference": "base_mix__base_demand_ssp245",
-                "method": "ramsey_discount",
-                "aggregation": "average",
-                "scc_usd_per_tco2": 50.0,
-                "base_year": 2025,
-            }
         ],
     )
 

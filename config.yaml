@@ -6,7 +6,7 @@ run:
 time_horizon:
   start: 2025
   end: 2100
-  step: 5  # Emission reporting grid; FaIR extends beyond this when damage_duration_years demands longer horizons.
+  step: 1  # Emission reporting grid; FaIR extends beyond this when damage_duration_years demands longer horizons.
 
 calc_emissions:
   countries:
@@ -61,16 +61,24 @@ climate_module:
       co2_species_name: CO2
       ch4_lifetime_label: historical_best
   climate_scenarios:
-    run: all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
+    run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
+      - ssp245
+      - ssp370  
     definitions:
       - id: ssp119
-        label: ssp119
+        label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
+        adjustment_specie: CO2 FFI
+      - id: ssp126
+        label: ssp126  # SSP1-2.6: well-below 2°C, early peaking and sustained reductions
         adjustment_specie: CO2 FFI
       - id: ssp245
-        label: ssp245
+        label: ssp245  # SSP2-4.5: middle-of-the-road, intermediate forcing
         adjustment_specie: CO2 FFI
       - id: ssp370
-        label: ssp370
+        label: ssp370  # SSP3-7.0: regional rivalry, high challenges to mitigation
+        adjustment_specie: CO2 FFI
+      - id: ssp585
+        label: ssp585  # SSP5-8.5: fossil-fuel intensive, high-end stress-test scenario
         adjustment_specie: CO2 FFI
   emission_scenarios:
     run: all  # Load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
@@ -95,25 +103,26 @@ air_pollution:
     - mean
     - min
     - max
+  electricity_share: 0.07  # Fraction of ambient pollution attributable to electricity generation (defaults to 0.07 from literature checks).
   country_weights: equal  # Use 'equal' for uniform averaging or provide {Country: weight}.
   scenarios: all  # 'all' or list of emission scenario names to process.
   value_of_statistical_life_usd: 3750000  # Monetised value per statistical life (USD-2025).
   pollutants:
     pm25:
-      stats_file: data/air_pollution/PM25_electricity_stats.csv
+      stats_file: data/air_pollution/PM25_country_stats.csv
       relative_risk: 1.08  # RR for a 10 µg/m³ change (log-linear model).
       reference_delta: 10.0  # µg/m³ associated with the relative_risk value.
       # country_weights:
       #   Bosnia and Herzegovenia: 2.0
       #   Kosovo: 1.0
     nox:
-      stats_file: data/air_pollution/NOx_electricity_stats.csv
+      stats_file: data/air_pollution/NOx_country_stats.csv
       relative_risk: 1.03
       reference_delta: 10.0
 
 socioeconomics:
   mode: dice
-  dice:
+  dice: #source: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1
     start_year: 2019
     scenario: as_climate_scenario  # 'as_climate_scenario' mirrors the climate SSP; replace with explicit SSP tag to lock it.
     population:
@@ -131,29 +140,19 @@ socioeconomics:
       capital_output_ratio: 3.41
       initial_stock_trillions: null
     capital_share: 0.36507
+  currency_conversion:
+    ppp2017_to_usd2025: 1.28  # Source: BEA GDPDEF (https://fred.stlouisfed.org/series/GDPDEF, retrieved Nov 21, 2025)
 
 economic_module:
   output_directory: results/economic
   gdp_series: null  # Optional override CSV with columns year,gdp_trillion_usd[,population_million]
   gdp_population_directory: data/GDP_and_Population_data
   run:
-    method: pulse  # 'kernel' or 'pulse'
-    kernel:
-      horizon: null
-      regularization_alpha: 1.0e-6
-      nonnegativity: false
-      smoothing_lambda: 0.0
-      allocation:
-        linearized_damage: false
     pulse:
-      pulse_size_tco2: 1000000.0
+      pulse_size_tco2: 1.0
   data_sources:
     emission_root: results/emissions/All_countries
     temperature_root: results/climate
-    climate_scenarios:
-      - ssp119
-      - ssp245
-      - ssp370
   reference_scenario: base_mix__base_demand
   evaluation_scenarios:
     - base_mix__scen1_lower
@@ -186,9 +185,9 @@ economic_module:
     run: ramsey_discount
     constant_discount:
       discount_rate: 0.03
-    ramsey_discount:
-      rho: 0.005
-      eta: 1.25
+    ramsey_discount: #source: Nesje, F., Drupp, M. A., Freeman, M. C., & Groom, B. (2023). Philosophers and economists agree on climate policy paths but for different reasons. Nature Climate Change 2023 13:6, 13(6), 515–522. https://doi.org/10.1038/s41558-023-01681-w
+      rho: 0.00625 #average betweeen mean philosopher and economist view
+      eta: 1.125
 
 results:
   run_directory: null  # Optional top-level results/<run> directory (combined with run.output_subdir when provided).

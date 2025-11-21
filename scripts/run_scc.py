@@ -39,20 +39,24 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence, cast
+from typing import Iterable, Mapping, cast
 
 import numpy as np
 import pandas as pd
 import yaml
 
 from calc_emissions import BASE_DEMAND_CASE
-from calc_emissions.scenario_io import load_scenario_absolute, load_scenario_delta
+from calc_emissions.scenario_io import (
+    load_scenario_absolute,
+    load_scenario_delta,
+    split_scenario_name,
+)
 from config_paths import (
     apply_results_run_directory,
     get_config_path,
     get_results_run_directory,
 )
-from economic_module import EconomicInputs, SCCAggregation, compute_scc
+from economic_module import EconomicInputs, SCCAggregation, SCCResult, compute_scc
 from economic_module.socioeconomics import DiceSocioeconomics
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,7 +90,6 @@ def _discover_emission_scenarios(emission_root: Path, baseline_case: str) -> lis
     return sorted(scenarios)
 
 
-RUN_METHODS = ["kernel", "pulse"]
 AVAILABLE_DISCOUNT_METHODS = ["constant_discount", "ramsey_discount"]
 AVAILABLE_AGGREGATIONS: tuple[SCCAggregation, ...] = ("average", "per_year")
 
@@ -104,6 +107,85 @@ def _format_path(path: Path) -> Path:
 def _safe_name(name: str) -> str:
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in name.lower())
     return cleaned.strip("_") or "scenario"
+
+
+def _write_scc_outputs(result: SCCResult, method: str, climate_key: str, output_dir: Path) -> None:
+    """Export pulse SCC timeseries for a given climate pathway/method."""
+    safe_climate = _safe_name(climate_key)
+    per_year = result.per_year.copy()
+    required = [
+        "year",
+        "discount_factor",
+        "discounted_damage_attributed_usd",
+        "scc_usd_per_tco2",
+    ]
+    missing = [col for col in required if col not in per_year.columns]
+    if missing:
+        raise KeyError(f"Per-year table missing required columns: {missing}")
+    frame = pd.DataFrame(
+        {
+            "year": per_year["year"].astype(int),
+            "discount_factor": per_year["discount_factor"].astype(float),
+            "pv_damage_per_pulse_usd": per_year["discounted_damage_attributed_usd"].astype(float),
+            "scc_usd_per_tco2": per_year["scc_usd_per_tco2"].astype(float),
+        }
+    )
+    if "pulse_size_tco2" in per_year.columns:
+        frame["pulse_size_tco2"] = per_year["pulse_size_tco2"].astype(float)
+    else:
+        frame["pulse_size_tco2"] = np.nan
+    if "delta_emissions_tco2" in per_year.columns:
+        frame["delta_emissions_tco2"] = per_year["delta_emissions_tco2"].astype(float)
+    else:
+        frame["delta_emissions_tco2"] = np.nan
+    if "discounted_delta_usd" in per_year.columns:
+        frame["discounted_delta_usd"] = per_year["discounted_delta_usd"].astype(float)
+    else:
+        frame["discounted_delta_usd"] = np.nan
+    pulse_path = output_dir / f"pulse_scc_timeseries_{method}_{safe_climate}.csv"
+    frame.to_csv(pulse_path, index=False)
+
+
+def _build_damage_table(
+    scenario_label: str,
+    scc_result: SCCResult,
+    emission_to_tonnes: float,
+) -> pd.DataFrame:
+    per_year = scc_result.per_year.copy()
+    years = per_year["year"].astype(int)
+    delta_tonnes = per_year["delta_emissions_tco2"].astype(float)
+    scc_series = per_year["scc_usd_per_tco2"].astype(float)
+    discount_series = per_year.get("discount_factor")
+    if discount_series is not None:
+        discount = discount_series.astype(float)
+    else:
+        discount = pd.Series(np.nan, index=per_year.index)
+
+    divisor = emission_to_tonnes if emission_to_tonnes not in (0, None) else 1.0
+    damage_df = pd.DataFrame(
+        {
+            "year": years,
+            "delta_emissions_mtco2": delta_tonnes / divisor,
+            "delta_emissions_tco2": delta_tonnes,
+            "scc_usd_per_tco2": scc_series,
+            "discount_factor": discount,
+        }
+    )
+    damage_df["damage_usd"] = damage_df["delta_emissions_tco2"] * damage_df["scc_usd_per_tco2"]
+    damage_df["discounted_damage_usd"] = damage_df["damage_usd"] * damage_df[
+        "discount_factor"
+    ].fillna(0.0)
+
+    details = scc_result.details
+    if "consumption_per_capita_usd" in details.columns:
+        consumption_lookup = dict(
+            zip(details["year"], details["consumption_per_capita_usd"], strict=False)
+        )
+        damage_df["consumption_per_capita_usd"] = damage_df["year"].map(consumption_lookup)
+    if "consumption_growth" in details.columns:
+        growth_lookup = dict(zip(details["year"], details["consumption_growth"], strict=False))
+        damage_df["consumption_growth"] = damage_df["year"].map(growth_lookup)
+    return damage_df
 
 
 def _resolve_path(path_like: str | Path, *, apply_run_directory: bool = True) -> Path:
@@ -241,12 +323,46 @@ def _parse_climate_labels(value: object) -> list[str]:
     return []
 
 
-def _split_climate_suffix(name: str, climate_labels: Sequence[str]) -> tuple[str, str | None]:
-    for label in sorted({cl.strip() for cl in climate_labels if cl}, key=len, reverse=True):
-        suffix = f"_{label}"
-        if name.endswith(suffix):
-            return name[: -len(suffix)], label
-    return name, None
+def _climate_labels_from_module(root_cfg: Mapping[str, object]) -> list[str]:
+    climate_cfg = root_cfg.get("climate_module", {}).get("climate_scenarios", {}) or {}
+    definitions = climate_cfg.get("definitions") or []
+    label_map: dict[str, str] = {}
+    for entry in definitions:
+        if not isinstance(entry, Mapping):
+            continue
+        label = str(entry.get("label") or entry.get("id") or "").strip()
+        if label:
+            label_map[label] = label
+
+    def _normalize(value: object) -> str | None:
+        if value is None:
+            return None
+        label = str(value).strip()
+        if not label:
+            return None
+        if label_map:
+            return label_map.get(label) or (label if label in label_map else None)
+        return label
+
+    run_cfg = climate_cfg.get("run")
+    resolved: list[str] = []
+    if isinstance(run_cfg, str):
+        if run_cfg.strip().lower() == "all":
+            resolved = list(label_map.values()) if label_map else []
+        else:
+            candidate = _normalize(run_cfg)
+            if candidate:
+                resolved = [candidate]
+    elif isinstance(run_cfg, Iterable):
+        for entry in run_cfg:
+            candidate = _normalize(entry)
+            if candidate:
+                resolved.append(candidate)
+
+    if not resolved and label_map:
+        resolved = list(label_map.values())
+
+    return [label for label in resolved if label]
 
 
 def _restrict_inputs_window(
@@ -312,14 +428,6 @@ def _restrict_inputs_window(
     )
 
 
-def _default_run_method(cfg: dict) -> str:
-    run_cfg = cfg.get("run", {})
-    method = run_cfg.get("method", "kernel")
-    if method not in RUN_METHODS:
-        method = "kernel"
-    return method
-
-
 def _default_discount_methods(cfg: dict) -> list[str]:
     methods_cfg = cfg.get("methods", {})
     run = methods_cfg.get("run")
@@ -341,7 +449,6 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
     aggregation_default = str(cfg.get("aggregation", "average")).lower()
     if aggregation_default not in AVAILABLE_AGGREGATIONS:
         aggregation_default = "average"
-    run_method_default = _default_run_method(cfg)
     damage_cfg = cfg.get("damage_function", {})
     damage_delta1_default = float(damage_cfg.get("delta1", 0.0))
     damage_delta2_default = float(damage_cfg.get("delta2", 0.002))
@@ -375,18 +482,7 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
         if climate_single_default is not None:
             climate_label_default = str(climate_single_default).strip()
         else:
-            climate_defs = (
-                root_cfg.get("climate_module", {})
-                .get("climate_scenarios", {})
-                .get("definitions", [])
-            )
-            if climate_defs:
-                first_def = climate_defs[0]
-                climate_label_default = (
-                    first_def.get("label") or first_def.get("id") or ""
-                ).strip()
-            else:
-                climate_label_default = ""
+            climate_label_default = ""
 
     parser = argparse.ArgumentParser(
         description=(
@@ -452,12 +548,6 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
         choices=AVAILABLE_AGGREGATIONS,
         default=aggregation_default,
         help="Return per-year SCC values or the aggregated average (default from config).",
-    )
-    parser.add_argument(
-        "--run-method",
-        choices=RUN_METHODS,
-        default=run_method_default,
-        help="Kernel-based SCC ('kernel') or FaIR pulse SCC ('pulse').",
     )
     parser.add_argument(
         "--discount-methods",
@@ -744,9 +834,7 @@ def main() -> None:
 
     if args.list_methods:
         msg_lines = [
-            "Available run methods:",
-            "  kernel - Kernel-based SCC allocation (fast).",
-            "  pulse  - Definition-faithful FaIR pulse runs (slower).",
+            "This tool always uses the FaIR pulse workflow.",
             "",
             "Available discounting methods:",
             "  constant_discount - fixed annual discount rate (e.g., 3%).",
@@ -755,7 +843,6 @@ def main() -> None:
         print("\n".join(msg_lines))
         return
 
-    run_method = args.run_method
     discount_methods = _default_discount_methods(config)
     if args.discount_methods:
         spec = args.discount_methods.strip()
@@ -768,8 +855,6 @@ def main() -> None:
                 discount_methods = valid
     if not discount_methods:
         parser.error("No valid discounting methods selected.")
-    if run_method == "pulse" and len(discount_methods) != 1:
-        parser.error("Pulse run method supports exactly one discounting method at a time.")
 
     time_horizon_cfg = root_cfg.get("time_horizon", {})
     horizon_start = int(time_horizon_cfg.get("start", args.base_year))
@@ -799,36 +884,10 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    temperature_sources: dict[str, Path]
-    emission_sources: dict[str, Path]
-    reference_lookup: dict[str, str] = {}
-    scenario_groups: list[dict[str, object]] = []
-
     if manual_temperature or manual_emission:
-        if not manual_temperature or not manual_emission:
-            parser.error(
-                "Provide both --temperature and --emission mappings when specifying manually."
-            )
-        if set(manual_temperature) != set(manual_emission):
-            parser.error("Temperature and emission scenario labels must match.")
-        temperature_sources = manual_temperature
-        emission_sources = manual_emission
-        reference = _select_reference(args, config, temperature_sources.keys())
-        targets = _select_targets(args, config, temperature_sources.keys(), reference)
-        if not targets:
-            parser.error("No target scenarios selected for evaluation.")
-        reference_lookup[reference] = reference
-        for scenario in targets:
-            reference_lookup[scenario] = reference
-        scenario_groups.append(
-            {
-                "reference": reference,
-                "targets": targets,
-                "temperature": temperature_sources,
-                "emission": emission_sources,
-                "ref_map": dict(reference_lookup),
-                "climate_label": None,
-            }
+        parser.error(
+            "Manual --temperature/--emission overrides are no longer supported; "
+            "configure the economic_module.data_sources section instead."
         )
     else:
         data_sources_cfg = config.get("data_sources", {}) or {}
@@ -853,9 +912,6 @@ def main() -> None:
         if isinstance(evaluation_cfg, str):
             evaluation_cfg = [evaluation_cfg]
         evaluation_cfg = [entry for entry in evaluation_cfg if str(entry).strip()]
-        discover_all = True  # always process all available emission scenarios
-        selected = set(evaluation_cfg)
-        _discover_emission_scenarios(emission_root_path, reference_default)
 
         climate_inputs = _parse_climate_labels(args.climate_scenario)
         if not climate_inputs:
@@ -864,6 +920,8 @@ def main() -> None:
             single_climate = data_sources_cfg.get("climate_scenario")
             if single_climate:
                 climate_inputs = [str(single_climate).strip()]
+        if not climate_inputs:
+            climate_inputs = _climate_labels_from_module(root_cfg)
         if not climate_inputs:
             climate_defs = (
                 root_cfg.get("climate_module", {})
@@ -895,7 +953,11 @@ def main() -> None:
             )  # pragma: no cover
         temperature_root_path = _ensure_directory(temperature_root_path, "temperature root")
 
-        # Build per-mix groups: SCC per SSP, damages for all mixes/demands.
+        available_scenarios: set[str] = set()
+        scenario_temperature: dict[tuple[str, str], Path] = {}
+        emission_cache: dict[str, pd.DataFrame] = {}
+        damage_entries: list[dict[str, str]] = []
+
         for mix_dir in sorted(p for p in emission_root_path.iterdir() if p.is_dir()):
             co2_path = mix_dir / "co2.csv"
             if not co2_path.exists():
@@ -904,82 +966,42 @@ def main() -> None:
                 df = pd.read_csv(co2_path, comment="#")
             except Exception:
                 continue
-            demand_cases: set[str] = set()
+            demand_cases: list[str] = []
             for col in df.columns:
                 if col.startswith("delta_") or col.startswith("absolute_"):
-                    demand_cases.add(col.split("_", 1)[1])
+                    demand_cases.append(col.split("_", 1)[1])
+            demand_cases = sorted(set(demand_cases))
             if not demand_cases:
                 continue
-            baseline_default = baseline_case if baseline_case in demand_cases else BASE_DEMAND_CASE
-            if baseline_default not in demand_cases:
-                baseline_default = sorted(demand_cases)[0]
-            mix_scenarios = {f"{mix_dir.name}__{d}" for d in demand_cases}
-            chosen = mix_scenarios if discover_all else {s for s in mix_scenarios if s in selected}
-            if not chosen:
-                continue
-            reference_base = f"{mix_dir.name}__{baseline_default}"
-            if reference_base not in mix_scenarios:
-                continue
-
-            for climate_label in climate_inputs:
-                ref_label = f"{reference_base}_{climate_label}"
-                temp_map: dict[str, Path] = {}
-                emission_map: dict[str, pd.DataFrame] = {}
-                ref_lookup: dict[str, str] = {}
-
-                baseline_temp = temperature_root_path / f"{reference_base}_{climate_label}.csv"
-                if not baseline_temp.exists():
-                    continue
-                try:
-                    ref_emission = _load_emission_frame_from_mix(
-                        emission_root_path,
-                        reference_base,
-                        args.emission_column,
-                        baseline_case,
-                    )
-                except (FileNotFoundError, KeyError, ValueError):
-                    continue
-                temp_map[ref_label] = baseline_temp
-                emission_map[ref_label] = ref_emission
-                ref_lookup[ref_label] = ref_label
-
-                targets: list[str] = []
-                for scenario in sorted(chosen):
-                    if scenario == reference_base:
-                        continue
-                    label = f"{scenario}_{climate_label}"
-                    temp_file = temperature_root_path / f"{scenario}_{climate_label}.csv"
-                    if not temp_file.exists():
-                        continue
+            mix_scenarios = {f"{mix_dir.name}__{case}" for case in demand_cases}
+            for case in demand_cases:
+                scenario_name = f"{mix_dir.name}__{case}"
+                available_scenarios.add(scenario_name)
+                if scenario_name not in emission_cache:
                     try:
-                        emission_frame = _load_emission_frame_from_mix(
+                        emission_cache[scenario_name] = _load_emission_frame_from_mix(
                             emission_root_path,
-                            scenario,
+                            scenario_name,
                             args.emission_column,
                             baseline_case,
                         )
                     except (FileNotFoundError, KeyError, ValueError):
                         continue
-                    temp_map[label] = temp_file
-                    emission_map[label] = emission_frame
-                    ref_lookup[label] = ref_label
-                    targets.append(label)
-
-                if targets:
-                    scenario_groups.append(
-                        {
-                            "reference": ref_label,
-                            "targets": targets,
-                            "temperature": temp_map,
-                            "emission": emission_map,
-                            "ref_map": ref_lookup,
-                            "climate_label": climate_label,
-                        }
-                    )
-
-    if not scenario_groups:
-        parser.error("No target scenarios selected for evaluation.")
-
+            for climate_label in climate_inputs:
+                for scenario_name in sorted(mix_scenarios):
+                    temp_file = temperature_root_path / f"{scenario_name}_{climate_label}.csv"
+                    if not temp_file.exists():
+                        continue
+                    scenario_temperature[(scenario_name, climate_label)] = temp_file
+                    _, demand_case = split_scenario_name(scenario_name)
+                    if demand_case != baseline_case:
+                        damage_entries.append(
+                            {
+                                "scenario": scenario_name,
+                                "mix": mix_dir.name,
+                                "climate": climate_label,
+                            }
+                        )
     output_dir = _resolve_path(args.output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -987,16 +1009,8 @@ def main() -> None:
     agg_start = args.aggregation_start
     agg_end = args.aggregation_end
 
-    summary_rows = []
     run_cfg = config.get("run", {}) or {}
-    kernel_cfg = run_cfg.get("kernel", {}) or {}
-    allocation_cfg = kernel_cfg.get("allocation", {}) or {}
     pulse_cfg = run_cfg.get("pulse", {}) or {}
-    kernel_horizon = kernel_cfg.get("horizon")
-    kernel_alpha = float(kernel_cfg.get("regularization_alpha", 1.0e-6))
-    kernel_nonneg = bool(kernel_cfg.get("nonnegativity", False))
-    kernel_smooth = float(kernel_cfg.get("smoothing_lambda", 0.0))
-    linearized_damage = bool(allocation_cfg.get("linearized_damage", False))
     damage_kwargs = {
         "delta1": args.damage_delta1,
         "delta2": args.damage_delta2,
@@ -1013,19 +1027,52 @@ def main() -> None:
         "disaster_gamma": args.damage_disaster_gamma,
         "disaster_mode": args.damage_disaster_mode,
     }
+    if pulse_cfg:
+        damage_kwargs["_pulse_size_tco2__"] = float(pulse_cfg.get("pulse_size_tco2", 1.0e6))
+    scc_cache: dict[tuple[str, str], SCCResult] = {}
 
-    for group in scenario_groups:
-        temp_subset = cast(dict[str, Path], group["temperature"])
-        emission_subset = cast(dict[str, Path], group["emission"])
-        reference_label = cast(str, group["reference"])
-        targets = cast(list[str], group["targets"])
-        ref_map = cast(dict[str, str], group["ref_map"])
-        climate_label = cast(str | None, group.get("climate_label"))
-        target_list = ", ".join(targets)
-        print(
-            f"[SCC] climate={climate_label or 'default'} "
-            f"reference={reference_label} targets={len(targets)} [{target_list}]"
-        )
+    if not damage_entries:
+        parser.error("No demand scenarios available for SCC damage calculations.")
+    if reference_default not in available_scenarios:
+        parser.error(f"Reference scenario '{reference_default}' not found in emission outputs.")
+
+    driver_candidates = [
+        scenario
+        for scenario in evaluation_cfg
+        if scenario in available_scenarios and scenario != reference_default
+    ]
+    driver_scenario = driver_candidates[0] if driver_candidates else None
+    if driver_scenario is None:
+        fallback = [s for s in sorted(available_scenarios) if s != reference_default]
+        if fallback:
+            driver_scenario = fallback[0]
+    if driver_scenario is None:
+        parser.error("Need at least one non-reference scenario to drive SCC computation.")
+
+    for climate_label in climate_inputs:
+        reference_label = f"{reference_default}_{climate_label}"
+        driver_label = f"{driver_scenario}_{climate_label}"
+        temp_reference = scenario_temperature.get((reference_default, climate_label))
+        temp_driver = scenario_temperature.get((driver_scenario, climate_label))
+        if temp_reference is None or temp_driver is None:
+            print(
+                f"[SCC] Skipping climate={climate_label} "
+                f"(missing temperature data for {reference_default} or {driver_scenario})."
+            )
+            continue
+        emission_reference = emission_cache.get(reference_default)
+        emission_driver = emission_cache.get(driver_scenario)
+        if emission_reference is None or emission_driver is None:
+            parser.error("Emission data missing for reference or driver scenario.")
+
+        temp_map = {
+            reference_label: temp_reference,
+            driver_label: temp_driver,
+        }
+        emission_map = {
+            reference_label: emission_reference,
+            driver_label: emission_driver,
+        }
 
         gdp_frame_override: pd.DataFrame | None = None
         if use_socioeconomics:
@@ -1042,8 +1089,8 @@ def main() -> None:
             gdp_frame_override = socio_cache.get(cache_key)
 
         inputs = EconomicInputs.from_csv(
-            temp_subset,
-            emission_subset,
+            temp_map,
+            emission_map,
             gdp_path,
             temperature_column=args.temperature_column,
             emission_column=args.emission_column,
@@ -1072,12 +1119,10 @@ def main() -> None:
             except ValueError as exc:
                 parser.error(str(exc))
 
-        pulse_max_year = None
-        if run_method == "pulse":
-            pulse_max_year = int(working_inputs.years.max())
-            horizon_end_cfg = time_horizon_cfg.get("end")
-            if horizon_end_cfg is not None:
-                pulse_max_year = min(pulse_max_year, int(horizon_end_cfg))
+        pulse_max_year = int(working_inputs.years.max())
+        horizon_end_cfg = time_horizon_cfg.get("end")
+        if horizon_end_cfg is not None:
+            pulse_max_year = min(pulse_max_year, int(horizon_end_cfg))
 
         if aggregation == "average":
             if agg_start is None or agg_end is None:
@@ -1115,124 +1160,63 @@ def main() -> None:
                     f"({working_inputs.years[0]}-{working_inputs.years[-1]})."
                 )
 
-            if run_method == "pulse" and agg_end is not None:
+            if agg_end is not None:
                 pulse_max_year = min(pulse_max_year, int(agg_end))
 
-        for scenario in targets:
-            scenario_reference = ref_map.get(scenario, reference_label)
-            safe_name = _safe_name(scenario)
+        for discount_method in discount_methods:
+            run_kwargs = {
+                "scenario": driver_label,
+                "reference": reference_label,
+                "base_year": args.base_year,
+                "aggregation": aggregation,
+                "add_tco2": args.add_tco2,
+                "damage_kwargs": dict(damage_kwargs),
+            }
+            if discount_method == "constant_discount":
+                run_kwargs["discount_rate"] = args.discount_rate
+            elif discount_method == "ramsey_discount":
+                run_kwargs["rho"] = args.rho
+                run_kwargs["eta"] = args.eta
 
-            for discount_method in discount_methods:
-                run_kwargs = {
-                    "scenario": scenario,
-                    "reference": scenario_reference,
-                    "base_year": args.base_year,
-                    "aggregation": aggregation,
-                    "add_tco2": args.add_tco2,
-                }
-                damage_kw = dict(damage_kwargs)
-                damage_kw["_kernel_horizon__"] = (
-                    int(kernel_horizon) if kernel_horizon is not None else 0
-                )
-                damage_kw["_kernel_alpha__"] = kernel_alpha
-                damage_kw["_kernel_nonneg__"] = kernel_nonneg
-                damage_kw["_kernel_smooth__"] = kernel_smooth
-                damage_kw["_linearized_flag__"] = linearized_damage
-                if run_method == "pulse":
-                    damage_kw["_pulse_size_tco2__"] = float(pulse_cfg.get("pulse_size_tco2", 1.0e6))
-                run_kwargs["damage_kwargs"] = damage_kw
+            result = compute_scc(
+                working_inputs,
+                "pulse",
+                discount_method=discount_method,
+                pulse_max_year=pulse_max_year,
+                **run_kwargs,
+            )
 
-                if discount_method == "constant_discount":
-                    run_kwargs["discount_rate"] = args.discount_rate
-                elif discount_method == "ramsey_discount":
-                    run_kwargs["rho"] = args.rho
-                    run_kwargs["eta"] = args.eta
+            scc_cache[(climate_label, discount_method)] = result
+            _write_scc_outputs(result, discount_method, climate_label, output_dir)
 
-                if run_method == "kernel":
-                    method_key = discount_method
-                    result = compute_scc(working_inputs, method_key, **run_kwargs)
-                    run_label = "kernel"
-                else:  # pulse
-                    method_key = "pulse"
-                    result = compute_scc(
-                        working_inputs,
-                        method_key,
-                        discount_method=discount_method,
-                        pulse_max_year=pulse_max_year,
-                        **run_kwargs,
-                    )
-                    run_label = "pulse"
+            print(
+                f"[SCC pulse:{discount_method}] SSP={climate_label} driver={driver_scenario} "
+                f"vs {reference_default} (base year {result.base_year})"
+            )
 
-                method_label = result.method
-                file_tag = method_label
-                details_path = output_dir / f"scc_{file_tag}_{safe_name}.csv"
-                result.details.to_csv(details_path, index=False)
+    if not scc_cache:
+        parser.error("No SCC results generated; check climate scenario availability.")
 
-                timeseries_path = output_dir / f"scc_timeseries_{file_tag}_{safe_name}.csv"
-                result.per_year.to_csv(timeseries_path, index=False)
-                extra_paths: list[Path] = [timeseries_path]
-
-                if run_label == "pulse":
-                    pulse_columns = {
-                        "year": "year",
-                        "discount_factor": "discount_factor",
-                        "discounted_damage_attributed_usd": "pv_damage_per_pulse_usd",
-                        "scc_usd_per_tco2": "scc_usd_per_tco2",
-                        "pulse_size_tco2": "pulse_size_tco2",
-                    }
-                    pulse_df = result.per_year[list(pulse_columns.keys())].rename(
-                        columns=pulse_columns
-                    )
-                    pulse_path = output_dir / f"pulse_scc_timeseries_{file_tag}_{safe_name}.csv"
-                    pulse_df.to_csv(pulse_path, index=False)
-                    extra_paths.append(pulse_path)
-
-                    damage_columns = {
-                        "year": "year",
-                        "delta_emissions_tco2": "delta_emissions_tco2",
-                        "delta_damage_usd": "delta_damage_usd",
-                        "discounted_delta_usd": "pv_delta_damage_usd",
-                    }
-                    damage_df = result.per_year[list(damage_columns.keys())].rename(
-                        columns=damage_columns
-                    )
-                    damage_path = output_dir / f"pulse_emission_damages_{file_tag}_{safe_name}.csv"
-                    damage_df.to_csv(damage_path, index=False)
-                    extra_paths.append(damage_path)
-
-                summary_rows.append(
-                    {
-                        "scenario": scenario,
-                        "reference": scenario_reference,
-                        "method": method_label,
-                        "run_method": run_label,
-                        "aggregation": aggregation,
-                        "scc_usd_per_tco2": result.scc_usd_per_tco2,
-                        "base_year": result.base_year,
-                        "total_delta_emissions_tco2": result.add_tco2,
-                        "discount_rate": args.discount_rate
-                        if method_label == "constant_discount"
-                        else np.nan,
-                        "rho": args.rho if method_label == "ramsey_discount" else np.nan,
-                        "eta": args.eta if method_label == "ramsey_discount" else np.nan,
-                    }
-                )
-
-                print(
-                    f"[{run_label}:{method_label}] SSP={climate_label or 'default'} "
-                    f"{scenario} vs {scenario_reference} (aggregation {aggregation}, "
-                    f"base year {result.base_year})"
-                )
-                print(f"  Details written to {_format_path(details_path)}")
-                for path in extra_paths:
-                    print(f"  Output written to {_format_path(path)}")
-
-    summary = pd.DataFrame(summary_rows)
-    summary_path = output_dir / "scc_summary.csv"
-    summary.to_csv(summary_path, index=False)
-
-    summary_display = _format_path(summary_path)
-    print(f"Summary table written to {summary_display}")
+    for entry in damage_entries:
+        climate_label = entry["climate"]
+        scenario_name = entry["scenario"]
+        mix_case = entry["mix"]
+        scenario_label = f"{scenario_name}_{climate_label}"
+        mix_dir = output_dir / mix_case
+        mix_dir.mkdir(parents=True, exist_ok=True)
+        for discount_method in discount_methods:
+            scc_result = scc_cache.get((climate_label, discount_method))
+            if scc_result is None:
+                continue
+            damage_df = _build_damage_table(
+                scenario_label,
+                scc_result,
+                args.emission_unit_multiplier,
+            )
+            damage_df["climate_scenario"] = climate_label
+            damage_df["method"] = discount_method
+            damage_path = mix_dir / f"damages_{discount_method}_{scenario_label}.csv"
+            damage_df.to_csv(damage_path, index=False)
 
 
 if __name__ == "__main__":

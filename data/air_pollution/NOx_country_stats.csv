@@ -1,7 +1,7 @@
-country,count,mean,median,std,min,max
-Albania,0,,,,,
-Bosnia and Herzegovenia,17,17.811764705882354,15.6,8.44991733339306,5.8,37.1
-Kosovo,8,15.1875,15.05,6.801562320526072,5.6,28.2
-Montenegro,5,15.040000000000001,15.4,3.6807607909235283,9.8,20.0
-North Macedonia,16,17.775,14.85,9.44863305810246,3.1,36.7
-Serbia,10,24.45,27.1,11.000934303756003,3.5,43.1
+country,median,baseline_deaths_per_year
+Albania,12.4,310
+Bosnia,12.9,460
+Kosovo,13.6,240
+Montenegro,11.3,50
+North Macedonia,15.7,330
+Serbia,16.2,1430

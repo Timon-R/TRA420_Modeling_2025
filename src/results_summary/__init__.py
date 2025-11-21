@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import shutil
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -41,7 +42,7 @@ class SummarySettings:
     plot_start: int = 2025
     plot_end: int = 2100
     climate_labels: list[str] = field(default_factory=list)
-    run_method: str = "kernel"
+    run_method: str = "pulse"
     scc_output_directory: Path | None = None
     base_year: int = 2025
     climate_output_directory: Path | None = None
@@ -50,6 +51,12 @@ class SummarySettings:
     per_country_emission_root: Path | None = None
     pattern_output_directory: Path | None = None
     pattern_countries: list[str] | None = None
+    air_output_directory: Path | None = None
+    air_pollution_pollutants: list[str] = field(default_factory=list)
+    air_pollution_stats: dict[str, dict[str, float]] = field(default_factory=dict)
+    air_pollution_country_baseline: dict[str, float] = field(default_factory=dict)
+    air_pollution_countries: list[str] = field(default_factory=list)
+    air_pollution_vsl: float | None = None
 
 
 @dataclass(slots=True)
@@ -60,10 +67,14 @@ class ScenarioMetrics:
     mortality_percent: dict[int, float] = field(default_factory=dict)
     mortality_baseline: dict[int, float] = field(default_factory=dict)
     mortality_value_delta: dict[int, float] | None = None
+    mortality_delta_timeseries: dict[int, float] | None = None
+    mortality_value_timeseries: dict[int, float] | None = None
     mortality_sum: dict[str, float] = field(default_factory=dict)
     mortality_value_sum: dict[str, float] = field(default_factory=dict)
     scc_usd_per_tco2: dict[str, dict[int, float]] = field(default_factory=dict)
     damages_usd: dict[str, dict[int, float]] = field(default_factory=dict)
+    damages_usd_timeseries: dict[str, dict[int, float]] | None = None
+    scc_usd_per_tco2_timeseries: dict[str, dict[int, float]] | None = None
     damages_sum: dict[str, dict[str, float]] = field(default_factory=dict)
     scc_average: dict[str, float] = field(default_factory=dict)
     damage_total_usd: dict[str, float] = field(default_factory=dict)
@@ -101,7 +112,11 @@ def _resolve_methods(methods_cfg: Mapping[str, object]) -> list[str]:
 
 
 def _safe_name(name: str) -> str:
-    return re.sub(r"[^0-9a-zA-Z]+", "_", name.strip().lower()).strip("_") or "scenario"
+    return re.sub(r"[^0-9a-zA-Z_]+", "_", name.strip().lower()).strip("_") or "scenario"
+
+
+def _slugify_label(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z]+", "_", value.strip()).strip("_")
 
 
 def _parse_climate_labels(value: object) -> list[str]:
@@ -119,6 +134,49 @@ def _parse_climate_labels(value: object) -> list[str]:
                 labels.append(label)
         return labels
     return []
+
+
+def _climate_labels_from_module(config: Mapping[str, object]) -> list[str]:
+    climate_cfg = (
+        config.get("climate_module", {}).get("climate_scenarios", {})
+        if isinstance(config.get("climate_module"), Mapping)
+        else {}
+    )
+    definitions = climate_cfg.get("definitions") or []
+    label_map: dict[str, str] = {}
+    for entry in definitions:
+        if not isinstance(entry, Mapping):
+            continue
+        label = str(entry.get("label") or entry.get("id") or "").strip()
+        if label:
+            label_map[label] = label
+
+    def _normalize(value: object) -> str | None:
+        label = str(value).strip()
+        if not label:
+            return None
+        if label_map:
+            return label_map.get(label) or (label if label in label_map else None)
+        return label
+
+    run_cfg = climate_cfg.get("run")
+    resolved: list[str] = []
+    if isinstance(run_cfg, str):
+        spec = run_cfg.strip().lower()
+        if spec == "all":
+            resolved = list(label_map.values()) if label_map else []
+        else:
+            candidate = _normalize(run_cfg)
+            if candidate:
+                resolved = [candidate]
+    elif isinstance(run_cfg, Iterable):
+        for entry in run_cfg:
+            candidate = _normalize(entry)
+            if candidate:
+                resolved.append(candidate)
+    if not resolved and label_map:
+        resolved = list(label_map.values())
+    return [label for label in resolved if label]
 
 
 def _split_climate_suffix(name: str, climate_labels: Sequence[str]) -> tuple[str, str | None]:
@@ -265,31 +323,6 @@ def _load_emission_frame_from_mix(
             "Unsupported emission_column '%s'. Use 'delta' or 'absolute'." % value_column
         )
     return frame
-
-
-def _load_scc_summary_table(path: Path) -> dict[str, dict[str, float]]:
-    if not path.exists():
-        LOGGER.debug("SCC summary table missing: %s", path)
-        return {}
-    frame = pd.read_csv(path)
-    required = {"scenario", "method", "scc_usd_per_tco2"}
-    if not required.issubset(frame.columns):
-        LOGGER.warning("SCC summary table %s missing required columns", path)
-        return {}
-    summary: dict[str, dict[str, float]] = {}
-    for _, row in frame.iterrows():
-        scenario = str(row["scenario"])
-        method = str(row["method"])
-        try:
-            value = float(row["scc_usd_per_tco2"])
-        except (TypeError, ValueError):
-            value = math.nan
-        store = summary.setdefault(scenario, {})
-        store[method] = value
-        safe = _safe_name(scenario)
-        if safe not in summary:
-            summary[safe] = store
-    return summary
 
 
 def _collect_socio_series(
@@ -506,6 +539,90 @@ def _read_mortality(
     )
 
 
+def _load_mortality_timeseries(path: Path) -> tuple[dict[int, float], dict[int, float]]:
+    if not path.exists():
+        return {}, {}
+    frame = pd.read_csv(path)
+    if "year" not in frame.columns:
+        return {}, {}
+    frame["year"] = frame["year"].astype(int)
+    delta = (
+        frame.set_index("year")["delta_deaths_per_year"].astype(float)
+        if "delta_deaths_per_year" in frame.columns
+        else pd.Series(dtype=float)
+    )
+    value = (
+        frame.set_index("year")["delta_value_usd"].astype(float)
+        if "delta_value_usd" in frame.columns
+        else pd.Series(dtype=float)
+    )
+    return (
+        {int(y): float(delta.get(int(y))) for y in delta.index},
+        {int(y): float(value.get(int(y))) for y in value.index},
+    )
+
+
+def _load_climate_scc_series(
+    output_dir: Path,
+    methods: Iterable[str],
+    climate_labels: Sequence[str],
+    years: Iterable[int],
+) -> tuple[
+    dict[tuple[str, str], dict[int, float]],
+    dict[tuple[str, str], dict[int, float]],
+    dict[tuple[str, str], float],
+]:
+    per_year_lookup: dict[tuple[str, str], dict[int, float]] = {}
+    full_lookup: dict[tuple[str, str], dict[int, float]] = {}
+    average_lookup: dict[tuple[str, str], float] = {}
+    labels = [label for label in climate_labels if label] or ["default"]
+    years_list = [int(year) for year in years]
+    for label in labels:
+        safe_label = _safe_name(label)
+        for method in methods:
+            candidates = [
+                output_dir / f"pulse_scc_timeseries_{method}_{label}.csv",
+                output_dir / f"pulse_scc_timeseries_{method}_{safe_label}.csv",
+            ]
+            path = next((p for p in candidates if p.exists()), None)
+            if path is None or not path.exists():
+                per_year_lookup[(label, method)] = {}
+                full_lookup[(label, method)] = {}
+                average_lookup[(label, method)] = math.nan
+                continue
+            try:
+                frame = pd.read_csv(path)
+            except Exception:
+                per_year_lookup[(label, method)] = {}
+                full_lookup[(label, method)] = {}
+                average_lookup[(label, method)] = math.nan
+                continue
+            required_cols = {"year", "scc_usd_per_tco2"}
+            if not required_cols.issubset(frame.columns):
+                per_year_lookup[(label, method)] = {}
+                full_lookup[(label, method)] = {}
+                average_lookup[(label, method)] = math.nan
+                continue
+            frame["year"] = frame["year"].astype(int)
+            scc_series = frame.set_index("year")["scc_usd_per_tco2"].astype(float)
+            per_year_lookup[(label, method)] = {
+                int(year): float(scc_series.get(int(year), math.nan)) for year in years_list
+            }
+            full_lookup[(label, method)] = {
+                int(year): float(value) for year, value in scc_series.items()
+            }
+            if {"delta_emissions_tco2", "discounted_delta_usd"}.issubset(frame.columns):
+                emissions = frame["delta_emissions_tco2"].astype(float).sum()
+                discounted = frame["discounted_delta_usd"].astype(float).sum()
+                if math.isfinite(emissions) and not math.isclose(emissions, 0.0):
+                    average_lookup[(label, method)] = discounted / emissions
+                else:
+                    average_lookup[(label, method)] = math.nan
+            else:
+                average_lookup[(label, method)] = math.nan
+    return per_year_lookup, full_lookup, average_lookup
+
+
 def _sum_over_periods(
     frame: pd.DataFrame, value_col: str, periods: Iterable[tuple[int, int]]
 ) -> dict[str, float]:
@@ -532,53 +649,84 @@ def _read_scc_timeseries(
     scenario: str,
     methods: Iterable[str],
     years: Iterable[int],
+    *,
+    climate_labels: Sequence[str],
+    climate_scc_lookup: Mapping[tuple[str, str], dict[int, float]],
+    climate_scc_full: Mapping[tuple[str, str], dict[int, float]],
+    currency_conversion: float = 1.0,
 ) -> tuple[
     dict[str, dict[int, float]],
     dict[str, dict[int, float]],
     dict[str, float],
+    dict[str, dict[int, float]],
+    dict[str, dict[int, float]],
 ]:
     scenario_key = _safe_name(scenario)
+    base_name, climate_label = _split_climate_suffix(scenario, climate_labels)
+    if not climate_label and climate_labels:
+        climate_label = climate_labels[0]
+    climate_key = climate_label or "default"
+    try:
+        mix_case, _ = split_scenario_name(base_name)
+    except ValueError:
+        mix_case = base_name
     damages: dict[str, dict[int, float]] = {}
     scc_values: dict[str, dict[int, float]] = {}
     totals: dict[str, float] = {}
+    damages_full: dict[str, dict[int, float]] = {}
+    scc_full: dict[str, dict[int, float]] = {}
     for method in methods:
-        candidates = [
-            output_dir / f"scc_timeseries_{method}_{scenario}.csv",
-            output_dir / f"scc_timeseries_{method}_{scenario_key}.csv",
+        climate_series = climate_scc_lookup.get((climate_key, method), {})
+        climate_full_series = climate_scc_full.get((climate_key, method), {})
+        scc_values[method] = {
+            int(year): float(climate_series.get(int(year), math.nan)) for year in years
+        }
+        scc_full[method] = {int(year): float(value) for year, value in climate_full_series.items()}
+
+        damage_candidates = [
+            output_dir / mix_case / f"damages_{method}_{scenario}.csv",
+            output_dir / mix_case / f"damages_{method}_{scenario_key}.csv",
+            output_dir / f"damages_{method}_{scenario}.csv",
         ]
-        path = next((p for p in candidates if p.exists()), None)
-        if not path.exists():
-            LOGGER.debug("SCC timeseries missing for %s (%s)", scenario, method)
+        damage_path = next((p for p in damage_candidates if p.exists()), None)
+        if damage_path is None:
+            LOGGER.debug("Damage file missing for %s (%s)", scenario, method)
             damages[method] = {year: math.nan for year in years}
-            scc_values[method] = {year: math.nan for year in years}
             totals[method] = math.nan
+            damages_full[method] = {}
             continue
-        frame = pd.read_csv(path)
-        if "year" not in frame.columns or "delta_damage_usd" not in frame.columns:
-            LOGGER.warning("SCC timeseries %s missing damage data", path)
+        try:
+            frame = pd.read_csv(damage_path)
+        except Exception:
             damages[method] = {year: math.nan for year in years}
             totals[method] = math.nan
-            scc_values[method] = {year: math.nan for year in years}
+            damages_full[method] = {}
+            continue
+        if "year" not in frame.columns or "damage_usd" not in frame.columns:
+            damages[method] = {year: math.nan for year in years}
+            totals[method] = math.nan
+            damages_full[method] = {}
             continue
         frame["year"] = frame["year"].astype(int)
-        # Prefer emission-year attributed NPV damages when available; fall back
-        # to per-calendar-year damage deltas to preserve backward compatibility.
-        damages_series = frame.set_index("year")["delta_damage_usd"].astype(float)
+        damages_series = frame.set_index("year")["damage_usd"].astype(float) * currency_conversion
         damages[method] = {
             int(year): float(damages_series.get(int(year), np.nan)) for year in years
         }
-        if "discounted_delta_usd" in frame.columns:
-            totals[method] = float(frame["discounted_delta_usd"].astype(float).sum(skipna=True))
+        damages_full[method] = {int(year): float(value) for year, value in damages_series.items()}
+        if "discounted_damage_usd" in frame.columns:
+            totals[method] = float(
+                frame["discounted_damage_usd"].astype(float).sum(skipna=True) * currency_conversion
+            )
+        elif "discount_factor" in frame.columns:
+            totals[method] = float(
+                (frame["damage_usd"].astype(float) * frame["discount_factor"].astype(float)).sum(
+                    skipna=True
+                )
+                * currency_conversion
+            )
         else:
             totals[method] = math.nan
-        if "scc_usd_per_tco2" in frame.columns:
-            scc_series = frame.set_index("year")["scc_usd_per_tco2"].astype(float)
-            scc_values[method] = {
-                int(year): float(scc_series.get(int(year), np.nan)) for year in years
-            }
-        else:
-            scc_values[method] = {year: math.nan for year in years}
-    return damages, scc_values, totals
+    return damages, scc_values, totals, damages_full, scc_full
 
 
 def _compute_damage_period_sums(
@@ -586,18 +734,25 @@ def _compute_damage_period_sums(
     scenario: str,
     methods: Iterable[str],
     periods: Iterable[tuple[int, int]],
+    *,
+    climate_labels: Sequence[str],
+    currency_conversion: float = 1.0,
 ) -> dict[str, dict[str, float]]:
     if not periods:
         return {}
     sums: dict[str, dict[str, float]] = {}
     scenario_key = _safe_name(scenario)
+    base_name, _ = _split_climate_suffix(scenario, climate_labels)
+    try:
+        mix_case, _ = split_scenario_name(base_name)
+    except ValueError:
+        mix_case = base_name
     for method in methods:
         method_sum: dict[str, float] = {}
         candidates = [
-            output_dir / f"pulse_emission_damages_{method}_{scenario}.csv",
-            output_dir / f"pulse_emission_damages_{method}_{scenario_key}.csv",
-            output_dir / f"scc_timeseries_{method}_{scenario}.csv",
-            output_dir / f"scc_timeseries_{method}_{scenario_key}.csv",
+            output_dir / mix_case / f"damages_{method}_{scenario}.csv",
+            output_dir / mix_case / f"damages_{method}_{scenario_key}.csv",
+            output_dir / f"damages_{method}_{scenario}.csv",
         ]
         path = next((p for p in candidates if p.exists()), None)
         if path is None:
@@ -609,13 +764,19 @@ def _compute_damage_period_sums(
             sums[method] = method_sum
             continue
         value_col = None
-        for candidate in ("discounted_delta_usd", "delta_damage_usd"):
+        for candidate in (
+            "discounted_damage_usd",
+            "discounted_delta_usd",
+            "damage_usd",
+            "delta_damage_usd",
+        ):
             if candidate in frame.columns:
                 value_col = candidate
                 break
         if value_col is None:
             sums[method] = method_sum
             continue
+        frame[value_col] = frame[value_col].astype(float) * currency_conversion
         method_sum = _sum_over_periods(frame, value_col, periods)
         sums[method] = method_sum
     return sums
@@ -669,8 +830,15 @@ def build_summary(
         )
     include_plots = bool(summary_cfg.get("include_plots", True))
     plot_format = str(summary_cfg.get("plot_format", "png"))
-    plot_start = int(summary_cfg.get("plot_start", 2025))
-    plot_end = int(summary_cfg.get("plot_end", 2100))
+    time_horizon_cfg = config.get("time_horizon", {})
+    if not isinstance(time_horizon_cfg, Mapping):
+        time_horizon_cfg = {}
+    horizon_start = time_horizon_cfg.get("start")
+    horizon_end = time_horizon_cfg.get("end")
+    plot_start = int(
+        horizon_start if horizon_start is not None else summary_cfg.get("plot_start", 2025)
+    )
+    plot_end = int(horizon_end if horizon_end is not None else summary_cfg.get("plot_end", 2100))
 
     aggregation_mode = str(economic_cfg.get("aggregation", "per_year"))
     aggregation_horizon_cfg = economic_cfg.get("aggregation_horizon")
@@ -685,7 +853,7 @@ def build_summary(
 
     methods = _resolve_methods(economic_cfg.get("methods", {}))
     run_cfg = economic_cfg.get("run", {}) if isinstance(economic_cfg, Mapping) else {}
-    run_method = str(run_cfg.get("method", "kernel")) if isinstance(run_cfg, Mapping) else "kernel"
+    run_method = str(run_cfg.get("method", "pulse")) if isinstance(run_cfg, Mapping) else "pulse"
 
     data_sources = economic_cfg.get("data_sources", {})
     if not isinstance(data_sources, Mapping):
@@ -728,6 +896,52 @@ def build_summary(
             run_directory,
             repo_root=root,
         )
+    pollutants_list: list[str] = []
+    air_stats: dict[str, dict[str, float]] = {}
+    air_country_baseline: dict[str, float] = {}
+    air_vsl: float | None = None
+    if isinstance(air_cfg, Mapping):
+        if "value_of_statistical_life_usd" in air_cfg:
+            try:
+                air_vsl = float(air_cfg.get("value_of_statistical_life_usd"))
+            except (TypeError, ValueError):
+                air_vsl = None
+        pollutants_cfg = air_cfg.get("pollutants")
+        if isinstance(pollutants_cfg, Mapping):
+            for key, value in pollutants_cfg.items():
+                pollutant_name = str(key)
+                pollutants_list.append(pollutant_name)
+                stats_file = value.get("stats_file") if isinstance(value, Mapping) else None
+                if not stats_file:
+                    continue
+                stats_path = _resolve_path(root, stats_file, run_directory)
+                try:
+                    stats_df = pd.read_csv(stats_path)
+                except Exception:
+                    continue
+                required = {"country", "baseline_deaths_per_year"}
+                if not required.issubset(stats_df.columns):
+                    continue
+                mapping: dict[str, float] = {}
+                for _, entry in stats_df.iterrows():
+                    country = entry.get("country")
+                    if not isinstance(country, str):
+                        continue
+                    slug = _slugify_label(country)
+                    if not slug:
+                        continue
+                    try:
+                        baseline_value = float(entry["baseline_deaths_per_year"])
+                    except (TypeError, ValueError):
+                        continue
+                    mapping[slug] = baseline_value
+                    air_country_baseline[slug] = (
+                        air_country_baseline.get(slug, 0.0) + baseline_value
+                    )
+                if mapping:
+                    air_stats[pollutant_name] = mapping
+        elif isinstance(pollutants_cfg, Iterable):
+            pollutants_list = [str(item) for item in pollutants_cfg if str(item)]
 
     emission_column = str(economic_cfg.get("emission_column", "delta"))
 
@@ -785,6 +999,8 @@ def build_summary(
         )
 
     climate_inputs = _parse_climate_labels(data_sources.get("climate_scenarios"))
+    if not climate_inputs:
+        climate_inputs = _climate_labels_from_module(config)
     climate_labels: list[str | None]
     if climate_inputs:
         climate_labels = climate_inputs
@@ -799,8 +1015,18 @@ def build_summary(
         climate_labels = sorted(set(derived)) or [None]
 
     climate_labels_str = [cl for cl in climate_labels if cl is not None]
+    effective_climate_labels = climate_labels_str or ["default"]
 
-    scc_summary_table = _load_scc_summary_table(scc_output_dir / "scc_summary.csv")
+    (
+        climate_scc_lookup,
+        climate_scc_full,
+        climate_scc_average,
+    ) = _load_climate_scc_series(
+        scc_output_dir,
+        methods,
+        effective_climate_labels,
+        years,
+    )
 
     metrics_map: dict[str, ScenarioMetrics] = {}
 
@@ -824,6 +1050,7 @@ def build_summary(
             mortality_baseline,
             mortality_value_delta,
         ) = _read_mortality(mortality_path, years)
+        mortality_ts, mortality_value_ts = _load_mortality_timeseries(mortality_path)
         mortality_frame = pd.read_csv(mortality_path) if mortality_path.exists() else pd.DataFrame()
         mortality_sums = _sum_over_periods(mortality_frame, "delta_deaths_per_year", year_periods)
         mortality_value_sums = _sum_over_periods(mortality_frame, "delta_value_usd", year_periods)
@@ -834,18 +1061,39 @@ def build_summary(
             temperature_delta = _read_temperature(temperature_path, years)
             temperature_series = _load_temperature_series(temperature_path)
 
-            damages, scc_values, damage_totals = _read_scc_timeseries(
-                scc_output_dir, scenario_label, methods, years
+            conversion = 1.0
+            socio_cfg = config.get("socioeconomics", {}) if isinstance(config, Mapping) else {}
+            conv_cfg = (
+                socio_cfg.get("currency_conversion", {}) if isinstance(socio_cfg, Mapping) else {}
+            )
+            conversion = float(conv_cfg.get("ppp2017_to_usd2025", 1.0))
+
+            damages, scc_values, damage_totals, damages_full, scc_full = _read_scc_timeseries(
+                scc_output_dir,
+                scenario_label,
+                methods,
+                years,
+                climate_labels=effective_climate_labels,
+                climate_scc_lookup=climate_scc_lookup,
+                climate_scc_full=climate_scc_full,
+                currency_conversion=conversion,
             )
             damage_sums = _compute_damage_period_sums(
-                scc_output_dir, scenario_label, methods, year_periods
+                scc_output_dir,
+                scenario_label,
+                methods,
+                year_periods,
+                climate_labels=effective_climate_labels,
+                currency_conversion=conversion,
             )
 
-            average_lookup = scc_summary_table.get(scenario_label) or scc_summary_table.get(
-                _safe_name(scenario_label), {}
-            )
-            scc_average = dict(average_lookup)
-            if aggregation_mode != "average":
+            climate_key = climate_label or "default"
+            if aggregation_mode == "average":
+                scc_average = {
+                    method: climate_scc_average.get((climate_key, method), math.nan)
+                    for method in methods
+                }
+            else:
                 scc_average = {}
 
             damages_adjusted = {method: dict(series) for method, series in damages.items()}
@@ -871,10 +1119,14 @@ def build_summary(
                 mortality_percent=mortality_percent,
                 mortality_baseline=mortality_baseline,
                 mortality_value_delta=mortality_value_delta,
+                mortality_delta_timeseries=mortality_ts,
+                mortality_value_timeseries=mortality_value_ts,
                 mortality_sum=mortality_sums,
                 mortality_value_sum=mortality_value_sums,
                 scc_usd_per_tco2=scc_values_copy,
+                scc_usd_per_tco2_timeseries=scc_full,
                 damages_usd=damages_adjusted,
+                damages_usd_timeseries=damages_full,
                 damages_sum=damage_sums,
                 scc_average=scc_average,
                 damage_total_usd=damage_totals,
@@ -905,6 +1157,8 @@ def build_summary(
         if isinstance(countries_cfg, Iterable) and not isinstance(countries_cfg, (str, bytes)):
             pattern_countries = [str(c) for c in countries_cfg if c]
 
+    air_country_list = sorted(air_country_baseline.keys())
+
     # Construct summary settings after climate label resolution
     settings = SummarySettings(
         years=years,
@@ -925,6 +1179,12 @@ def build_summary(
         pattern_output_directory=pattern_output_directory,
         pattern_countries=pattern_countries,
         year_periods=year_periods,
+        air_output_directory=air_output_dir,
+        air_pollution_pollutants=pollutants_list,
+        air_pollution_stats=air_stats,
+        air_pollution_country_baseline=air_country_baseline,
+        air_pollution_countries=air_country_list,
+        air_pollution_vsl=air_vsl,
     )
     settings.per_country_emission_root = _default_per_country_root(config, root, run_directory)
 
@@ -951,6 +1211,9 @@ def write_summary_csv(
     per_country_root = settings.per_country_emission_root
     pattern_dir = settings.pattern_output_directory
     pattern_countries = settings.pattern_countries or []
+    air_output_dir = settings.air_output_directory
+    air_pollutants = settings.air_pollution_pollutants or []
+    years_set = set(settings.years)
     cached_country_dirs: dict[str, list[Path]] = {}
 
     def _country_dirs(mix_case: str) -> list[Path]:
@@ -983,27 +1246,28 @@ def write_summary_csv(
                 year, math.nan
             )
             row[f"delta_T_C_{year}"] = metrics.temperature_delta_c.get(year, math.nan)
-            row[f"air_pollution_mortality_difference_{year}"] = metrics.mortality_delta.get(
-                year, math.nan
+            row[f"air_pollution_mortality_difference_all_countries_{year}"] = (
+                metrics.mortality_delta.get(year, math.nan)
             )
-            row[f"air_pollution_mortality_percent_change_{year}"] = metrics.mortality_percent.get(
-                year, math.nan
-            )
+            percent_value = metrics.mortality_percent.get(year, math.nan)
+            if isinstance(percent_value, (int, float)) and math.isfinite(percent_value):
+                percent_value = percent_value * 100.0
+            row[f"air_pollution_mortality_percent_change_all_countries_{year}"] = percent_value
             if metrics.mortality_value_delta is not None:
-                row[f"air_pollution_monetary_benefit_usd_{year}"] = (
+                row[f"air_pollution_monetary_benefit_all_countries_usd_{year}"] = (
                     metrics.mortality_value_delta.get(year, math.nan)
                 )
         for label, value in metrics.mortality_sum.items():
-            row[f"air_pollution_mortality_difference_sum_{label}"] = value
+            row[f"air_pollution_mortality_difference_sum_all_countries_{label}"] = value
         for label, value in metrics.mortality_value_sum.items():
-            row[f"air_pollution_monetary_benefit_sum_usd_{label}"] = value
+            row[f"air_pollution_monetary_benefit_sum_all_countries_usd_{label}"] = value
         if settings.aggregation_mode == "average":
             for method in methods:
                 row[f"scc_average_{method}"] = metrics.scc_average.get(method, math.nan)
         else:
             for method in methods:
                 for year in settings.years:
-                    key = f"SCC_{method}_{year}_usd_per_tco2"
+                    key = f"SCC_{method}_{year}_PPP_USD_2025_discounted_to_year_per_tco2"
                     value = metrics.scc_usd_per_tco2.get(method, {}).get(year, math.nan)
                     row[key] = value
         for method in methods:
@@ -1035,6 +1299,109 @@ def write_summary_csv(
                             continue
                         row[f"delta_{pollutant}_{country}_{year}"] = float(matches.iloc[0])
 
+        per_country_delta = defaultdict(lambda: defaultdict(float))
+        if air_output_dir and air_pollutants:
+            for pollutant in air_pollutants:
+                conc_path = air_output_dir / scenario / f"{pollutant}_concentration_summary.csv"
+                if not conc_path.exists():
+                    continue
+                try:
+                    conc_df = pd.read_csv(conc_path)
+                except Exception:
+                    continue
+                base_col = "baseline_concentration_micro_g_per_m3"
+                new_col = "new_concentration_micro_g_per_m3"
+                delta_col = "delta_concentration_micro_g_per_m3"
+                if "year" not in conc_df.columns or delta_col not in conc_df.columns:
+                    continue
+                grouped = conc_df.groupby("year")
+                for year in settings.years:
+                    if year not in grouped.groups:
+                        continue
+                    subset = grouped.get_group(year)
+                    weights = subset["weight"].astype(float) if "weight" in subset.columns else None
+                    if weights is None or weights.sum() <= 0.0:
+                        weights = pd.Series(1.0, index=subset.index, dtype=float)
+                    weights = weights.fillna(0.0)
+                    total = weights.sum()
+                    if total <= 0.0:
+                        continue
+                    weights = weights / total
+                    if base_col in subset.columns:
+                        value = float((subset[base_col].astype(float) * weights).sum())
+                        row[
+                            f"baseline_concentration_{pollutant}_micro_g_per_m3_all_countries_{year}"
+                        ] = value
+                    if new_col in subset.columns:
+                        new_value = float((subset[new_col].astype(float) * weights).sum())
+                        row[
+                            f"new_concentration_{pollutant}_micro_g_per_m3_all_countries_{year}"
+                        ] = new_value
+                    delta_value = float((subset[delta_col].astype(float) * weights).sum())
+                    row[
+                        f"air_pollution_concentration_delta_{pollutant}_microgram_per_m3_all_countries_{year}"
+                    ] = delta_value
+                    for _, entry in subset.iterrows():
+                        country = entry.get("country")
+                        if not isinstance(country, str):
+                            continue
+                        slug = _slugify_label(country)
+                        if not slug:
+                            continue
+                        try:
+                            per_country_delta = float(entry[delta_col])
+                        except (TypeError, ValueError):
+                            continue
+                        row[
+                            f"air_pollution_concentration_delta_{pollutant}_{slug}_microgram_per_m3_{year}"
+                        ] = per_country_delta
+            for pollutant in air_pollutants:
+                stats_map = settings.air_pollution_stats.get(pollutant) or {}
+                if not stats_map:
+                    continue
+                impact_path = air_output_dir / scenario / f"{pollutant}_health_impact.csv"
+                if not impact_path.exists():
+                    continue
+                try:
+                    impact_df = pd.read_csv(impact_path)
+                except Exception:
+                    continue
+                required_cols = {"country", "year", "percent_change_mortality"}
+                if not required_cols.issubset(impact_df.columns):
+                    continue
+                for _, entry in impact_df.iterrows():
+                    country = entry.get("country")
+                    if not isinstance(country, str):
+                        continue
+                    slug = _slugify_label(country)
+                    if not slug:
+                        continue
+                    baseline = stats_map.get(slug)
+                    if baseline is None:
+                        continue
+                    try:
+                        year = int(entry["year"])
+                        pct_value = float(entry["percent_change_mortality"])
+                    except (TypeError, ValueError):
+                        continue
+                    if year not in years_set:
+                        continue
+                    per_country_delta[slug][year] += pct_value * baseline
+
+        if per_country_delta:
+            baseline_map = settings.air_pollution_country_baseline
+            vsl = settings.air_pollution_vsl
+            for slug, year_map in per_country_delta.items():
+                baseline_total = baseline_map.get(slug, 0.0)
+                for year, delta_value in year_map.items():
+                    row[f"air_pollution_mortality_difference_{slug}_{year}"] = delta_value
+                    percent = math.nan
+                    if baseline_total:
+                        percent = (delta_value / baseline_total) * 100.0
+                    row[f"air_pollution_mortality_percent_change_{slug}_{year}"] = percent
+                    if vsl:
+                        row[f"air_pollution_monetary_benefit_{slug}_{year}"] = delta_value * vsl
+
         if pattern_dir is not None and climate_label:
             for iso3 in pattern_countries:
                 pattern_file = pattern_dir / f"{iso3}_{base_label}_{climate_label}.csv"
@@ -1061,18 +1428,31 @@ def write_summary_csv(
         ordered.append(f"delta_co2_Mt_all_countries_{year}")
         ordered.append(f"delta_T_C_{year}")
         for method in methods:
-            ordered.append(f"SCC_{method}_{year}_usd_per_tco2")
+            ordered.append(f"SCC_{method}_{year}_PPP_USD_2025_discounted_to_year_per_tco2")
         for method in methods:
             ordered.append(f"damages_PPP2020_usd_baseyear_{settings.base_year}_{method}_{year}")
-        ordered.append(f"air_pollution_mortality_difference_{year}")
-        ordered.append(f"air_pollution_mortality_percent_change_{year}")
-        ordered.append(f"air_pollution_monetary_benefit_usd_{year}")
+        ordered.append(f"air_pollution_mortality_difference_all_countries_{year}")
+        ordered.append(f"air_pollution_mortality_percent_change_all_countries_{year}")
+        ordered.append(f"air_pollution_monetary_benefit_all_countries_usd_{year}")
+        for pollutant in settings.air_pollution_pollutants:
+            ordered.append(
+                f"air_pollution_concentration_delta_{pollutant}_microgram_per_m3_all_countries_{year}"
+            )
+        for country in settings.air_pollution_countries:
+            ordered.append(f"air_pollution_mortality_difference_{country}_{year}")
+            ordered.append(f"air_pollution_mortality_percent_change_{country}_{year}")
+            ordered.append(f"air_pollution_monetary_benefit_{country}_{year}")
+        for pollutant in settings.air_pollution_pollutants:
+            for country in settings.air_pollution_countries:
+                ordered.append(
+                    f"air_pollution_concentration_delta_{pollutant}_{country}_microgram_per_m3_{year}"
+                )
     if metrics_map:
         sample_metrics = next(iter(metrics_map.values()))
         for label in sample_metrics.mortality_sum:
-            ordered.append(f"air_pollution_mortality_difference_sum_{label}")
+            ordered.append(f"air_pollution_mortality_difference_sum_all_countries_{label}")
         for label in sample_metrics.mortality_value_sum:
-            ordered.append(f"air_pollution_monetary_benefit_sum_usd_{label}")
+            ordered.append(f"air_pollution_monetary_benefit_sum_all_countries_usd_{label}")
         for method in methods:
             for label in sample_metrics.damages_sum.get(method, {}):
                 ordered.append(
@@ -1198,15 +1578,20 @@ def _plot_temperature_timeseries(
     if not valid_series:
         LOGGER.info("No temperature timeseries data available; skipping plot.")
         return
+    # Compute mean across scenarios and plot a single line
+    all_years = sorted({year for series in valid_series.values() for year in series})
+    mean_series: dict[int, float] = {}
+    for year in all_years:
+        vals = [series.get(year) for series in valid_series.values() if year in series]
+        if vals:
+            mean_series[year] = float(np.mean(vals))
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     start_year, end_year = window
-    for scenario, series in valid_series.items():
-        years_sorted = sorted(year for year in series if start_year <= year <= end_year)
-        if not years_sorted:
-            continue
-        values = [series[year] for year in years_sorted]
-        ax.plot(years_sorted, values, marker="o", label=scenario)
+    years_sorted = [y for y in sorted(mean_series) if start_year <= y <= end_year]
+    if years_sorted:
+        values = [mean_series[y] for y in years_sorted]
+        ax.plot(years_sorted, values, marker="o", label="mean")
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Temperature delta (°C)")
@@ -1220,16 +1605,79 @@ def _plot_temperature_timeseries(
     plt.close(fig)
 
 
+def _plot_temperature_envelopes(
+    metrics_map: Mapping[str, ScenarioMetrics], settings: SummarySettings, output_dir: Path
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping temperature envelopes")
+        return
+
+    grouped: dict[tuple[str, str | None], dict[str, Mapping[int, float]]] = {}
+    for scenario, metrics in metrics_map.items():
+        base, climate = _split_climate_suffix(scenario, settings.climate_labels)
+        try:
+            mix, demand = split_scenario_name(base)
+        except ValueError:
+            continue
+        series = metrics.temperature_timeseries
+        if not series:
+            continue
+        grouped.setdefault((mix, climate), {})[demand] = series
+
+    # One plot per mix, multiple SSPs in same figure
+    mixes = {}
+    for (mix, climate), demand_map in grouped.items():
+        mixes.setdefault(mix, {})[climate or "all"] = demand_map
+
+    for mix, climates in mixes.items():
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        has_data = False
+        for idx, (climate, demand_map) in enumerate(sorted(climates.items(), key=lambda x: x[0])):
+            mean_series = demand_map.get("scen1_mean")
+            lower_series = demand_map.get("scen1_lower")
+            upper_series = demand_map.get("scen1_upper")
+            if mean_series is None or lower_series is None or upper_series is None:
+                continue
+            years = sorted(set(mean_series) & set(lower_series) & set(upper_series))
+            if not years:
+                continue
+            x = [int(y) for y in years if settings.plot_start <= y <= settings.plot_end]
+            if not x:
+                continue
+            mean_vals = [mean_series[y] for y in x]
+            lower_vals = [lower_series[y] for y in x]
+            upper_vals = [upper_series[y] for y in x]
+            color = f"C{idx % 10}"
+            ax.plot(x, mean_vals, label=climate or "all SSPs", color=color)
+            ax.fill_between(x, lower_vals, upper_vals, color=color, alpha=0.2)
+            has_data = True
+        if not has_data:
+            plt.close(fig)
+            continue
+        ax.set_xlabel("Year")
+        ax.set_ylabel("Temperature delta (°C)")
+        ax.set_title(f"Temperature Delta — {mix}")
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.legend()
+        mix_dir = output_dir / mix
+        mix_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"temperature_delta_envelopes.{settings.plot_format}"
+        fig.tight_layout()
+        fig.savefig(mix_dir / fname, format=settings.plot_format)
+        plt.close(fig)
+
+
 def _plot_scc_timeseries(
     settings: SummarySettings,
     methods: Iterable[str],
     metrics_map: Mapping[str, ScenarioMetrics],
 ) -> None:
-    if settings.run_method != "pulse":
-        return
     if settings.scc_output_directory is None:
         LOGGER.info("SCC output directory not available; skipping SCC timeseries plot.")
         return
+    LOGGER.debug("SCC output directory: %s", settings.scc_output_directory)
     try:
         import matplotlib.pyplot as plt
     except ImportError:  # pragma: no cover - optional dependency
@@ -1239,40 +1687,47 @@ def _plot_scc_timeseries(
     output_dir = settings.output_directory / "plots"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Single plot: SCC per SSP over full horizon
+    label_candidates = list(settings.climate_labels or [])
+    if not label_candidates and settings.scc_output_directory is not None:
+        auto_labels: set[str] = set()
+        for path in settings.scc_output_directory.glob("pulse_scc_timeseries_*.csv"):
+            stem = path.stem  # pulse_scc_timeseries_<method>_<label>
+            parts = stem.split("_")
+            if len(parts) < 4:
+                continue
+            auto_labels.add(parts[-1])
+        if auto_labels:
+            label_candidates = sorted(auto_labels)
+    if not label_candidates:
+        label_candidates = ["default"]
     for method in methods:
         curves: list[tuple[list[int], list[float], str]] = []
-        plotted_labels: set[str] = set()
-        for scenario in sorted(metrics_map):
-            safe_name = _safe_name(scenario)
-            path = settings.scc_output_directory / f"scc_timeseries_{method}_{safe_name}.csv"
-            if not path.exists():
+        for climate in label_candidates:
+            label = climate or "default"
+            safe_label = _safe_name(label)
+            candidates = [
+                settings.scc_output_directory / f"pulse_scc_timeseries_{method}_{label}.csv",
+                settings.scc_output_directory / f"pulse_scc_timeseries_{method}_{safe_label}.csv",
+            ]
+            path = next((p for p in candidates if p.exists()), None)
+            if path is None:
                 continue
-
-            if settings.climate_labels:
-                _, climate_label = _split_climate_suffix(scenario, settings.climate_labels)
-                legend_label = climate_label or scenario
-            else:
-                legend_label = scenario
-
-            if legend_label in plotted_labels:
+            LOGGER.debug("Reading SCC timeseries from %s", path)
+            try:
+                df = pd.read_csv(path)
+            except Exception:
                 continue
-
-            df = pd.read_csv(path)
             if "year" not in df.columns or "scc_usd_per_tco2" not in df.columns:
-                LOGGER.debug("SCC timeseries %s missing required columns", path)
                 continue
-            df = df.dropna(subset=["scc_usd_per_tco2"])
-            if df.empty:
-                continue
+            df["year"] = df["year"].astype(int)
             df = df.sort_values("year")
-            mask = (df["year"] >= settings.plot_start) & (df["year"] <= settings.plot_end)
-            df = df.loc[mask]
-            if df.empty:
+            window = df[(df["year"] >= settings.plot_start) & (df["year"] <= settings.plot_end)]
+            if window.empty:
                 continue
-            years = df["year"].astype(int).tolist()
-            values = df["scc_usd_per_tco2"].astype(float).tolist()
-            curves.append((years, values, legend_label))
-            plotted_labels.add(legend_label)
+            years_sorted = window["year"].tolist()
+            values = window["scc_usd_per_tco2"].astype(float).tolist()
+            curves.append((years_sorted, values, label))
 
         if not curves:
             continue
@@ -1281,7 +1736,7 @@ def _plot_scc_timeseries(
         for years, values, label in curves:
             ax.plot(years, values, marker="o", linewidth=1.6, label=label)
         ax.set_xlabel("Year")
-        ax.set_ylabel("SCC (USD/tCO₂)")
+        ax.set_ylabel("SCC (PPP USD-2025 discounted to year per tCO₂)")
         ax.set_title(f"SCC Timeseries ({method})")
         ax.grid(True, linestyle="--", alpha=0.3)
         ax.legend()
@@ -1302,143 +1757,86 @@ def write_plots(
         LOGGER.info("Plot generation disabled via configuration.")
         return
 
-    years = settings.years
     output_dir = settings.output_directory / "plots"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Emission delta (Mt CO2)
-    emission_data = _pivot_metric(metrics_map, "emission_delta_mt")
-    _plot_grouped_bars(
-        emission_data,
-        years,
-        title="Emission Delta (Mt CO₂)",
-        ylabel="Mt CO₂",
-        output_path=output_dir,
-        file_suffix="emission_delta",
-        plot_format=settings.plot_format,
-    )
-
-    # Temperature delta (°C)
-    temp_data = _pivot_metric(metrics_map, "temperature_delta_c")
-    _plot_grouped_bars(
-        temp_data,
-        years,
-        title="Temperature Delta (°C)",
-        ylabel="°C",
-        output_path=output_dir,
-        file_suffix="temperature_delta",
-        plot_format=settings.plot_format,
-    )
-
-    # Mortality delta (deaths/year)
-    mortality_data = _pivot_metric(metrics_map, "mortality_delta")
-    _plot_grouped_bars(
-        mortality_data,
-        years,
-        title="Mortality Delta (deaths/year)",
-        ylabel="deaths/year",
-        output_path=output_dir,
-        file_suffix="mortality_delta",
-        plot_format=settings.plot_format,
-    )
-
-    # Mortality percent (%)
-    mortality_percent_data = {
-        scenario: {
-            year: value * 100 if not math.isnan(value) else value for year, value in values.items()
-        }
-        for scenario, values in _pivot_metric(metrics_map, "mortality_percent").items()
-    }
-    _plot_grouped_bars(
-        mortality_percent_data,
-        years,
-        title="Mortality Change (%)",
-        ylabel="Percent change",
-        output_path=output_dir,
-        file_suffix="mortality_percent",
-        plot_format=settings.plot_format,
-    )
-
-    # Mortality value (USD/year)
-    mortality_value_data = {
-        scenario: values
-        for scenario, values in _pivot_metric(metrics_map, "mortality_value_delta").items()
-        if values
-    }
-    if mortality_value_data:
-        mortality_value_scaled = {
-            scenario: {
-                year: value / 1e9 if not math.isnan(value) else value
-                for year, value in series.items()
-            }
-            for scenario, series in mortality_value_data.items()
-        }
-        _plot_grouped_bars(
-            mortality_value_scaled,
-            years,
-            title="Mortality Value (Billion USD/year)",
-            ylabel="Billion USD/year",
-            output_path=output_dir,
-            file_suffix="mortality_value",
-            plot_format=settings.plot_format,
-        )
-
-    for method in methods:
-        damages_data = _pivot_metric(metrics_map, "damages_usd", method)
-        damages_scaled = {
-            scenario: {
-                year: value / 1e9 if not math.isnan(value) else value
-                for year, value in values.items()
-            }
-            for scenario, values in damages_data.items()
-        }
-        _plot_grouped_bars(
-            damages_scaled,
-            years,
-            title=f"Climate Damages ({method}) [Billion USD]",
-            ylabel="Billion USD",
-            output_path=output_dir,
-            file_suffix=f"damages_{method}",
-            plot_format=settings.plot_format,
-        )
-
-        scc_data = _pivot_metric(metrics_map, "scc_usd_per_tco2", method)
-        _plot_grouped_bars(
-            scc_data,
-            years,
-            title=f"SCC ({method}) [USD/tCO₂]",
-            ylabel="USD/tCO₂",
-            output_path=output_dir,
-            file_suffix=f"scc_{method}",
-            plot_format=settings.plot_format,
-        )
-
-    emission_ts = {
-        scenario: metrics.emission_timeseries or {}
-        for scenario, metrics in metrics_map.items()
-        if metrics.emission_timeseries is not None
-    }
-    _plot_emission_timeseries(
-        emission_ts,
-        output_path=output_dir,
-        file_name="emission_delta_timeseries",
-        plot_format=settings.plot_format,
-        window=(settings.plot_start, settings.plot_end),
-    )
-
-    temperature_ts = {
-        scenario: metrics.temperature_timeseries for scenario, metrics in metrics_map.items()
-    }
+    # Temperature envelopes per mix/SSP
     _plot_temperature_timeseries(
-        temperature_ts,
+        {},
         output_path=output_dir,
-        file_name="temperature_delta_timeseries",
+        file_name="temperature_delta_timeseries",  # legacy placeholder; envelopes handled below
         plot_format=settings.plot_format,
         window=(settings.plot_start, settings.plot_end),
     )
-
-    _plot_scc_timeseries(settings, methods, metrics_map)
+    _plot_temperature_envelopes(metrics_map, settings, output_dir)
     _plot_socioeconomic_timeseries(settings)
     _include_background_plots(settings, output_dir)
+
+    # SCC timeseries per method/SSP (single PNG per method)
+    _plot_scc_timeseries(settings, methods, metrics_map)
+
+    def _collect_by_mix(attr: str, method: str | None = None):
+        data: dict[str, dict[str, dict[str, dict[int, float]]]] = {}
+        for scenario, metrics in metrics_map.items():
+            base, climate = _split_climate_suffix(scenario, settings.climate_labels)
+            try:
+                mix, demand = split_scenario_name(base)
+            except ValueError:
+                continue
+            series = getattr(metrics, attr)
+            if attr == "emission_delta_mt" and metrics.emission_timeseries:
+                series = metrics.emission_timeseries
+            if attr == "mortality_delta" and metrics.mortality_delta_timeseries:
+                series = metrics.mortality_delta_timeseries
+            if attr == "mortality_value_delta" and metrics.mortality_value_timeseries:
+                series = metrics.mortality_value_timeseries
+            if method and isinstance(series, Mapping):
+                if attr == "damages_usd" and metrics.damages_usd_timeseries:
+                    series = metrics.damages_usd_timeseries.get(method, {})
+                else:
+                    series = series.get(method, {})
+            if not isinstance(series, Mapping):
+                continue
+            mapping = data.setdefault(mix, {}).setdefault(climate or "all", {})
+            mapping[demand] = {int(k): float(v) for k, v in series.items()}
+        return data
+
+    mix_emission = _collect_by_mix("emission_delta_mt")
+    mix_mortality = _collect_by_mix("mortality_delta")
+    mix_mortality_value = _collect_by_mix("mortality_value_delta")
+    mix_damages = _collect_by_mix("damages_usd", method="ramsey_discount")
+
+    _plot_lines_for_mix(
+        mix_emission,
+        "emission_delta",
+        "Mt CO₂",
+        settings,
+        output_dir,
+        per_climate=False,
+    )
+    _plot_lines_for_mix(
+        mix_mortality,
+        "mortality_delta",
+        "deaths/year",
+        settings,
+        output_dir,
+        per_climate=False,
+    )
+    _plot_lines_for_mix(
+        mix_mortality_value,
+        "mortality_value",
+        "USD/year",
+        settings,
+        output_dir,
+        per_climate=False,
+    )
+    _plot_lines_for_mix(
+        mix_damages,
+        "damages",
+        "USD",
+        settings,
+        output_dir,
+    )
 
 
 def _include_background_plots(settings: SummarySettings, plots_dir: Path) -> None:
@@ -1528,3 +1926,76 @@ def _parse_year_periods(summary_cfg: Mapping[str, object]) -> list[tuple[int, in
                 continue
             periods.append((start, end))
     return periods
+
+
+def _plot_lines_for_mix(
+    mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
+    metric_name: str,
+    ylabel: str,
+    settings: SummarySettings,
+    output_dir: Path,
+    *,
+    per_climate: bool = True,
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping %s plots", metric_name)
+        return
+
+    if not mix_data:
+        return
+
+    for mix, climates in mix_data.items():
+        if not climates:
+            continue
+        if per_climate:
+            data_entries = sorted(climates.items(), key=lambda item: str(item[0]))
+        else:
+            representative = climates.get("all") or next(iter(climates.values()), None)
+            data_entries = [("aggregate", representative)] if representative else []
+        if not data_entries:
+            continue
+
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        plotted = False
+        for idx, (label_key, demand_map) in enumerate(data_entries):
+            if not demand_map:
+                continue
+            center = demand_map.get("scen1_mean") or demand_map.get(BASE_DEMAND_CASE)
+            lower = demand_map.get("scen1_lower")
+            upper = demand_map.get("scen1_upper")
+            if center is None or lower is None or upper is None:
+                continue
+            yrs = sorted(
+                y
+                for y in set(center) & set(lower) & set(upper)
+                if settings.plot_start <= y <= settings.plot_end
+            )
+            if not yrs:
+                continue
+            central_vals = [center[y] for y in yrs]
+            lower_vals = [lower[y] for y in yrs]
+            upper_vals = [upper[y] for y in yrs]
+            color = f"C{idx % 10}"
+            label = label_key if per_climate else "mean"
+            ax.plot(yrs, central_vals, label=label, color=color, linewidth=2)
+            ax.fill_between(yrs, lower_vals, upper_vals, color=color, alpha=0.15)
+            plotted = True
+
+        if not plotted:
+            plt.close(fig)
+            continue
+
+        ax.set_title(f"{metric_name.replace('_', ' ').title()} — {mix}")
+        ax.set_xlabel("Year")
+        ax.set_ylabel(ylabel)
+        ax.grid(True, linestyle="--", alpha=0.3)
+        if per_climate:
+            ax.legend()
+        subdir = output_dir / mix
+        subdir.mkdir(parents=True, exist_ok=True)
+        fname = f"{metric_name}.{settings.plot_format}"
+        fig.tight_layout()
+        fig.savefig(subdir / fname, format=settings.plot_format)
+        plt.close(fig)

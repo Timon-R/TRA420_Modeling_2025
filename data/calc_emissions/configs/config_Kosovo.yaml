@@ -1,10 +1,6 @@
 calc_emissions:
   emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Kosovo.csv
   output_directory: results/emissions/Kosovo
-  years:
-    start: 2025
-    end: 2100
-    step: 5
   demand_scenarios:
     base_demand:
       description: Kosovo base demand (was 'reference') (TWh).

@@ -83,8 +83,6 @@ def _build_config(tmp_path: Path, include_horizon: bool) -> dict:
         "base_year": 2025,
         "aggregation": "average",
         "run": {
-            "method": "kernel",
-            "kernel": {},
             "pulse": {},
         },
         "methods": {"run": "ramsey_discount"},
@@ -132,7 +130,7 @@ def test_run_scc_aggregation_horizon(
     else:
         run_scc.main()
         output_dir = Path(config["economic_module"]["output_directory"])
-        timeseries = output_dir / "scc_timeseries_ramsey_discount_base_mix__policy_ssp245.csv"
+        timeseries = output_dir / "pulse_scc_timeseries_ramsey_discount_ssp245.csv"
         assert timeseries.exists()
         df = pd.read_csv(timeseries)
         assert set(df["year"].astype(int)) == set(range(2025, 2031))
@@ -140,30 +138,22 @@ def test_run_scc_aggregation_horizon(
 
 def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     config = _build_config(tmp_path, include_horizon=True)
-    config["economic_module"]["run"]["method"] = "pulse"
     config["economic_module"]["methods"] = {
         "run": "ramsey_discount",
         "ramsey_discount": {"rho": 0.01, "eta": 1.0},
     }
 
     monkeypatch.setattr(run_scc, "_load_config", lambda: config)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["run_scc.py", "--run-method", "pulse", "--discount-methods", "ramsey_discount"],
-    )
+    monkeypatch.setattr(sys, "argv", ["run_scc.py", "--discount-methods", "ramsey_discount"])
 
     run_scc.main()
     output_dir = Path(config["economic_module"]["output_directory"])
-    base = "ramsey_discount_base_mix__policy_ssp245"
-
-    primary = output_dir / f"scc_timeseries_{base}.csv"
-    assert primary.exists()
-    primary_df = pd.read_csv(primary)
-    assert set(primary_df["year"].astype(int)) == set(range(2025, 2031))
+    mix_case = "base_mix"
+    scenario_label = "base_mix__policy_ssp245"
+    base = "ramsey_discount_ssp245"
 
     pulse_scc = output_dir / f"pulse_scc_timeseries_{base}.csv"
-    pulse_damage = output_dir / f"pulse_emission_damages_{base}.csv"
+    pulse_damage = output_dir / mix_case / f"damages_ramsey_discount_{scenario_label}.csv"
     assert pulse_scc.exists()
     assert pulse_damage.exists()
 
@@ -174,15 +164,20 @@ def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "pv_damage_per_pulse_usd",
         "scc_usd_per_tco2",
         "pulse_size_tco2",
+        "delta_emissions_tco2",
+        "discounted_delta_usd",
     }
     assert set(pulse_df["year"].astype(int)) == set(range(2025, 2031))
 
     damage_df = pd.read_csv(pulse_damage)
-    assert set(damage_df.columns) == {
+    assert set(damage_df.columns) >= {
         "year",
+        "delta_emissions_mtco2",
         "delta_emissions_tco2",
-        "delta_damage_usd",
-        "pv_delta_damage_usd",
+        "scc_usd_per_tco2",
+        "discount_factor",
+        "damage_usd",
+        "discounted_damage_usd",
     }
     assert set(damage_df["year"].astype(int)) == set(range(2025, 2031))
 

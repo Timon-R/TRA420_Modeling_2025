@@ -61,6 +61,7 @@ def test_air_pollution_run_from_config_creates_outputs(tmp_path: Path):
         },
         "air_pollution": {
             "output_directory": str(root / "results" / "air_pollution"),
+            "electricity_share": 1.0,
             "country_weights": {"Testland_A": 3.0, "Testland_B": 1.0},
             "pollutants": {
                 "pm25": {
@@ -249,6 +250,7 @@ def test_air_pollution_with_baseline_deaths_and_vsl(tmp_path: Path):
         },
         "air_pollution": {
             "output_directory": str(root / "results" / "air_pollution"),
+            "electricity_share": 1.0,
             "value_of_statistical_life_usd": 1_000_000.0,
             "pollutants": {
                 "pm25": {"stats_file": str(stats_path)},

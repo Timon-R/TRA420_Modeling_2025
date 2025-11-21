@@ -63,6 +63,7 @@ class PollutantImpact:
     baseline_deaths_per_year: float | None = None
     deaths_summary: pd.DataFrame | None = None
     baseline_deaths_by_country: pd.Series | None = None
+    electricity_share: pd.Series | None = None
 
 
 @dataclass
@@ -129,6 +130,7 @@ def run_from_config(
     module_weights_cfg = (
         module_baseline_cfg.get("weights") if isinstance(module_baseline_cfg, Mapping) else None
     )
+    electricity_share_cfg = module_cfg.get("electricity_share", 0.07)
 
     if emission_results is None:
         emission_results = run_emissions(
@@ -164,12 +166,15 @@ def run_from_config(
                 continue
 
             cfg = pollutant_cfg.get(pollutant, {})
-            concentrations, baseline_deaths_by_country = _load_concentrations(
-                config_root,
-                cfg.get("stats_file", DEFAULT_POLLUTANT_FILES.get(pollutant)),
-                cfg.get("concentration_measure", default_measure),
-                fallback_measures,
-                countries_filter,
+            concentrations, baseline_deaths_by_country, electricity_share_series = (
+                _load_concentrations(
+                    config_root,
+                    cfg.get("stats_file", DEFAULT_POLLUTANT_FILES.get(pollutant)),
+                    cfg.get("concentration_measure", default_measure),
+                    fallback_measures,
+                    countries_filter,
+                    electricity_share_cfg,
+                )
             )
 
             if concentrations.empty:
@@ -189,7 +194,7 @@ def run_from_config(
 
             beta = _derive_beta(cfg, pollutant)
             emission_ratio = _compute_emission_ratio(scenario_series, baseline_series)
-            impacts = _build_impacts(concentrations, emission_ratio, beta)
+            impacts = _build_impacts(concentrations, emission_ratio, beta, electricity_share_series)
 
             if impacts.empty:
                 continue
@@ -221,9 +226,13 @@ def run_from_config(
                 baseline_deaths_per_year=baseline_deaths,
                 deaths_summary=deaths_summary,
                 baseline_deaths_by_country=baseline_deaths_by_country,
+                electricity_share=electricity_share_series,
             )
 
             _write_output(output_dir, scenario_name, pollutant, impacts)
+            _write_concentration_summary(
+                output_dir, scenario_name, pollutant, impacts, country_weights
+            )
             if deaths_summary is not None:
                 _write_mortality_summary(output_dir, scenario_name, pollutant, deaths_summary)
 
@@ -278,13 +287,37 @@ def _normalise_scenario_selection(selection: object) -> set[str]:
     return set()
 
 
+def _resolve_electricity_share(cfg: object, countries: Iterable[str]) -> pd.Series:
+    """Return per-country electricity shares bounded to [0, 1]."""
+
+    countries = [str(c) for c in countries]
+    default = cfg
+    shares: dict[str, float] = {}
+
+    if isinstance(cfg, Mapping):
+        for key, value in cfg.items():
+            if key is None:
+                continue
+            country = str(key)
+            shares[country] = float(value)
+        default = cfg.get("default", 0.07)
+
+    if not isinstance(default, (int, float)):
+        default = 0.07
+
+    default = max(0.0, min(float(default), 1.0))
+    series = pd.Series({c: max(0.0, min(float(shares.get(c, default)), 1.0)) for c in countries})
+    return series.astype(float)
+
+
 def _load_concentrations(
     config_dir: Path,
     stats_path: str | None,
     preferred_measure: str,
     fallback_measures: Iterable[str],
     countries_filter: Iterable[str] | None,
-) -> tuple[pd.Series, pd.Series | None]:
+    electricity_share_cfg: object,
+) -> tuple[pd.Series, pd.Series | None, pd.Series]:
     if not stats_path:
         return pd.Series(dtype=float)
 
@@ -322,10 +355,13 @@ def _load_concentrations(
         countries = [c for c in countries_filter if c in series.index]
         series = series.loc[countries]
 
+    shares = _resolve_electricity_share(electricity_share_cfg, series.index)
     series = series.dropna()
+    shares = shares.reindex(series.index).fillna(shares.mean() if not shares.empty else 0.0)
     if baseline_deaths is not None:
         baseline_deaths = baseline_deaths.reindex(series.index).dropna()
-    return series, baseline_deaths
+        shares = shares.reindex(series.index).fillna(shares.mean() if not shares.empty else 0.0)
+    return series, baseline_deaths, shares
 
 
 def _derive_beta(cfg: Mapping[str, object], pollutant: str) -> float:
@@ -490,6 +526,7 @@ def _build_impacts(
     concentrations: pd.Series,
     emission_ratio: pd.Series,
     beta: float,
+    electricity_share: pd.Series,
 ) -> pd.DataFrame:
     records = []
     for year, ratio in emission_ratio.items():
@@ -510,7 +547,13 @@ def _build_impacts(
 
         multiplier = float(ratio)
         for country, baseline_conc in concentrations.items():
-            new_conc = baseline_conc * multiplier
+            share_value = electricity_share.get(country, math.nan)
+            if pd.isna(share_value):
+                share_value = (
+                    float(electricity_share.mean()) if not electricity_share.empty else 0.0
+                )
+            share = max(0.0, min(float(share_value), 1.0))
+            new_conc = baseline_conc * (1.0 + share * (multiplier - 1.0))
             delta_conc = new_conc - baseline_conc
             perc_change = math.exp(beta * delta_conc) - 1.0
             records.append(
@@ -601,10 +644,13 @@ def _build_total_mortality_summary(
         return None
 
     series_map: dict[str, pd.Series] = {}
+    baseline_map: dict[str, float] = {}
     for impact in pollutant_results.values():
         if impact.weighted_percent_change.empty:
             continue
         series_map[impact.pollutant] = impact.weighted_percent_change
+        if impact.baseline_deaths_per_year is not None:
+            baseline_map[impact.pollutant] = float(impact.baseline_deaths_per_year)
 
     if not series_map:
         return None
@@ -612,14 +658,28 @@ def _build_total_mortality_summary(
     combined = pd.DataFrame(series_map).sort_index()
     combined = combined.dropna(how="all")
 
+    use_baseline_weights = not weights_cfg and any(value > 0.0 for value in baseline_map.values())
     rows: list[dict[str, float]] = []
     for year, row in combined.iterrows():
         available_pollutants = [col for col, value in row.items() if pd.notna(value)]
         if not available_pollutants:
             continue
-        weights = _resolve_weights(weights_cfg, available_pollutants)
-        values = row[weights.index].to_numpy(dtype=float, copy=True)
-        percent_change = float(np.dot(values, weights.to_numpy(dtype=float, copy=True)))
+        if use_baseline_weights:
+            numerator = 0.0
+            denom = 0.0
+            for pollutant in available_pollutants:
+                baseline = baseline_map.get(pollutant)
+                if baseline is None or baseline <= 0.0:
+                    continue
+                numerator += baseline * float(row[pollutant])
+                denom += baseline
+            if denom <= 0.0:
+                continue
+            percent_change = numerator / denom
+        else:
+            weights = _resolve_weights(weights_cfg, available_pollutants)
+            values = row[weights.index].to_numpy(dtype=float, copy=True)
+            percent_change = float(np.dot(values, weights.to_numpy(dtype=float, copy=True)))
         delta = baseline_deaths_per_year * percent_change
         entry = {
             "year": int(year),
@@ -647,6 +707,38 @@ def _write_output(output_dir: Path, scenario: str, pollutant: str, impacts: pd.D
     scenario_dir.mkdir(parents=True, exist_ok=True)
     path = scenario_dir / f"{pollutant}_health_impact.csv"
     impacts.to_csv(path, index=False)
+
+
+def _write_concentration_summary(
+    output_dir: Path, scenario: str, pollutant: str, impacts: pd.DataFrame, weights: pd.Series
+) -> None:
+    if impacts.empty:
+        return
+    scenario_dir = output_dir / scenario
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    path = scenario_dir / f"{pollutant}_concentration_summary.csv"
+
+    weights = weights.astype(float).fillna(0.0)
+    if weights.sum() <= 0.0:
+        weights = pd.Series(1.0, index=weights.index)
+    weights = weights / weights.sum()
+
+    rows: list[dict[str, float | str]] = []
+    for year, group in impacts.groupby("year"):
+        for _, row in group.iterrows():
+            country = row["country"]
+            rows.append(
+                {
+                    "year": int(year),
+                    "country": country,
+                    "weight": float(weights[country]) if country in weights else 0.0,
+                    "baseline_concentration_micro_g_per_m3": float(row["baseline_concentration"]),
+                    "new_concentration_micro_g_per_m3": float(row["new_concentration"]),
+                    "delta_concentration_micro_g_per_m3": float(row["delta_concentration"]),
+                }
+            )
+    if rows:
+        pd.DataFrame(rows).sort_values(["year", "country"]).to_csv(path, index=False)
 
 
 def _write_mortality_summary(

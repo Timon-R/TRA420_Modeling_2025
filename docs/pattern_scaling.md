@@ -80,3 +80,6 @@ python scripts/run_pattern_scaling.py
 
 The script loads `config.yaml`, computes scaling factors based on the selected
 weighting and countries, and writes scaled CSVs to `pattern_scaling.output_directory`.
+
+## References
+- [CMIP6 pattern scaling factors]:

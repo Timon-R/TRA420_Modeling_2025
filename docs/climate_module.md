@@ -46,14 +46,17 @@ temperature trajectories for baseline and emission-adjusted scenarios.
 - Callable adjustments `f(timepoints, cfg)` must return an array matching the
   timepoint length; results are interpreted as Gt CO₂/yr.
 - The `step_change` helper creates a piecewise constant change:
-  $$
+
+$$
 \Delta E(t) =
     \begin{cases}
       0 & t < T_{\text{start}} \\
       \Delta & t \ge T_{\text{start}}
     \end{cases}
 $$
+
   where `Δ` is specified in Mt CO₂/yr and converted to Gt inside the runner.
+
 - FaIR climate parameters are broadcast to `(config, layer)` matrices using
   `_broadcast_matrix` and `_broadcast_vector`.
 
@@ -159,3 +162,7 @@ Python code, import `climate_module.scenario_runner.run_scenarios` and provide
 - Unit tests focus on deterministic helpers (`TemperatureResult`, broadcasting,
   delta conversion); full FaIR integrations are best exercised in notebook or
   regression workflows due to run-time cost.
+
+## References
+- [FaIR model and calibration files]: Smith, C. (2025). fair calibration data (1.5.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.17392386
+

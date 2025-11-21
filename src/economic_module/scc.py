@@ -19,10 +19,8 @@ from climate_module.scenario_runner import (
 )
 
 DamageFunction = Callable[..., np.ndarray]
-SCCMethod = Literal["constant_discount", "ramsey_discount", "pulse"]
+SCCMethod = Literal["pulse"]
 SCCAggregation = Literal["per_year", "average"]
-
-KERNEL_REGULARIZATION = 1e-6
 
 _PULSE_RESULT_CACHE: dict[
     tuple[str, tuple[int, ...], float, float, float],
@@ -410,7 +408,6 @@ class SCCResult:
     scc_usd_per_tco2: float
     per_year: pd.DataFrame
     details: pd.DataFrame
-    temperature_kernel: np.ndarray | None = None
     run_method: str | None = None
 
 
@@ -588,119 +585,6 @@ def compute_damage_difference(
 
 
 # ---------------------------------------------------------------------------
-# Temperature kernel and damage attribution helpers
-# ---------------------------------------------------------------------------
-
-
-def _estimate_temperature_kernel(
-    emission_delta: np.ndarray,
-    temperature_delta: np.ndarray,
-    *,
-    regularization: float = KERNEL_REGULARIZATION,
-    horizon: int | None = None,
-    smoothing_lambda: float = 0.0,
-    nonnegativity: bool = False,
-) -> np.ndarray:
-    emission_delta = np.asarray(emission_delta, dtype=float)
-    temperature_delta = np.asarray(temperature_delta, dtype=float)
-    n = emission_delta.shape[0]
-    if n == 0:
-        return np.empty(0, dtype=float)
-    m = n if horizon is None else max(1, min(n, int(horizon)))
-    toeplitz = np.zeros((n, m), dtype=float)
-    for i in range(n):
-        length = min(i + 1, m)
-        seg = emission_delta[i - length + 1 : i + 1][::-1]
-        toeplitz[i, :length] = seg
-    gram = toeplitz.T @ toeplitz
-    if regularization > 0:
-        gram = gram + regularization * np.eye(n, dtype=float)
-    # Adjust identity to match m if truncated
-    if gram.shape[0] != n and regularization > 0:
-        gram = toeplitz.T @ toeplitz + regularization * np.eye(gram.shape[0], dtype=float)
-    # Optional smoothing penalty (first-order differences)
-    if smoothing_lambda > 0.0 and gram.shape[0] >= 2:
-        D = np.eye(gram.shape[0], dtype=float) - np.eye(gram.shape[0], k=1, dtype=float)
-        D = D[:-1, :]
-        gram = gram + smoothing_lambda * (D.T @ D)
-    rhs = toeplitz.T @ temperature_delta
-    try:
-        kernel_m = np.linalg.solve(gram, rhs)
-    except np.linalg.LinAlgError:
-        kernel_m = np.linalg.lstsq(gram, rhs, rcond=None)[0]
-    if nonnegativity:
-        kernel_m = np.maximum(kernel_m, 0.0)
-    # Embed in full-length kernel (pad zeros if truncated)
-    if m == n:
-        return kernel_m
-    kernel = np.zeros(n, dtype=float)
-    kernel[:m] = kernel_m
-    return kernel
-
-
-def _temperature_contributions(
-    emission_delta: np.ndarray,
-    kernel: np.ndarray,
-) -> np.ndarray:
-    emission_delta = np.asarray(emission_delta, dtype=float)
-    kernel = np.asarray(kernel, dtype=float)
-    n = emission_delta.shape[0]
-    contributions = np.zeros((n, n), dtype=float)
-    for tau in range(n):
-        value = emission_delta[tau]
-        if np.isclose(value, 0.0):
-            continue
-        remaining = n - tau
-        if remaining <= 0:
-            continue
-        contributions[tau:, tau] = kernel[:remaining] * value
-    return contributions
-
-
-def _allocate_damages_to_emission_years(
-    *,
-    base_temperatures: np.ndarray,
-    gdp_trillion_usd: np.ndarray,
-    damage_func: DamageFunction,
-    damage_kwargs: Mapping[str, float] | None,
-    temperature_contrib: np.ndarray,
-    base_damage_fraction: np.ndarray,
-) -> np.ndarray:
-    damage_kwargs = dict(damage_kwargs or {})
-    gdp_usd = np.asarray(gdp_trillion_usd, dtype=float) * 1e12
-    base_temperatures = np.asarray(base_temperatures, dtype=float)
-    base_damage_fraction = np.asarray(base_damage_fraction, dtype=float)
-    base_damage_usd = base_damage_fraction * gdp_usd
-    n_years = temperature_contrib.shape[0]
-    damage_contrib = np.zeros_like(temperature_contrib, dtype=float)
-    # Optional linearization slope (fraction per °C) for additivity
-    linearize = False
-    slope_fraction = None
-    if isinstance(damage_kwargs, dict) and damage_kwargs.get("_linearized_flag__", False):
-        linearize = True
-        eps = float(damage_kwargs.get("_linearized_eps__", 1e-4))
-        safe_kwargs = {k: v for k, v in damage_kwargs.items() if not str(k).startswith("_")}
-        damage_fraction_eps = damage_func(base_temperatures + eps, **safe_kwargs)
-        slope_fraction = (damage_fraction_eps - base_damage_fraction) / eps
-
-    for tau in range(n_years):
-        temp_delta = temperature_contrib[:, tau]
-        if np.allclose(temp_delta, 0.0):
-            continue
-        if linearize and slope_fraction is not None:
-            damage_contrib[:, tau] = slope_fraction * temp_delta * gdp_usd
-        else:
-            temps_with_tau = base_temperatures + temp_delta
-            safe_kwargs = {
-                k: v for k, v in (damage_kwargs or {}).items() if not str(k).startswith("_")
-            }
-            damage_fraction_with_tau = damage_func(temps_with_tau, **safe_kwargs)
-            damage_usd_with_tau = damage_fraction_with_tau * gdp_usd
-            damage_contrib[:, tau] = damage_usd_with_tau - base_damage_usd
-    return damage_contrib
-
-
-# ---------------------------------------------------------------------------
 # Discounting helpers
 # ---------------------------------------------------------------------------
 
@@ -774,260 +658,11 @@ def _ramsey_discount_factors(
 # ---------------------------------------------------------------------------
 
 
-def _build_per_year_table(
-    damage_df: pd.DataFrame,
-    *,
-    scenario: str,
-    reference: str,
-    discount_factors: np.ndarray,
-    damage_func: DamageFunction,
-    damage_kwargs: Mapping[str, float] | None,
-    kernel_regularization: float = KERNEL_REGULARIZATION,
-    kernel_horizon: int | None = None,
-    kernel_nonnegativity: bool = False,
-    kernel_smoothing_lambda: float = 0.0,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    per_year = damage_df[["year", "delta_damage_usd", "delta_emissions_tco2"]].copy()
-    years = per_year["year"].astype(int).to_numpy()
-    discount_factors = np.asarray(discount_factors, dtype=float)
-    if discount_factors.shape[0] != years.shape[0]:
-        raise ValueError("Discount factor length must match the number of years.")
-
-    per_year["discount_factor"] = discount_factors
-    per_year["discounted_delta_usd"] = per_year["delta_damage_usd"].astype(float) * discount_factors
-
-    delta_emissions = per_year["delta_emissions_tco2"].astype(float).to_numpy()
-    temperature_reference = damage_df[_column("temperature_c", reference)].astype(float).to_numpy()
-    temperature_scenario = damage_df[_column("temperature_c", scenario)].astype(float).to_numpy()
-    temperature_delta = temperature_scenario - temperature_reference
-
-    kernel = _estimate_temperature_kernel(
-        delta_emissions,
-        temperature_delta,
-        regularization=kernel_regularization,
-        horizon=kernel_horizon,
-        smoothing_lambda=kernel_smoothing_lambda,
-        nonnegativity=kernel_nonnegativity,
-    )
-    temperature_contrib = _temperature_contributions(delta_emissions, kernel)
-
-    gdp_trillion = damage_df["gdp_trillion_usd"].astype(float).to_numpy()
-    base_damage_fraction = damage_df[_column("damage_fraction", reference)].astype(float).to_numpy()
-
-    # Pass a special flag for linearized allocations via damage_kwargs
-    damage_contrib = _allocate_damages_to_emission_years(
-        base_temperatures=temperature_reference,
-        gdp_trillion_usd=gdp_trillion,
-        damage_func=damage_func,
-        damage_kwargs=damage_kwargs,
-        temperature_contrib=temperature_contrib,
-        base_damage_fraction=base_damage_fraction,
-    )
-
-    damage_attributed = damage_contrib.sum(axis=0)
-    discounted_damage_attributed = (discount_factors[:, None] * damage_contrib).sum(axis=0)
-
-    scc_values = np.full(years.shape[0], np.nan, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        for idx, emission_delta in enumerate(delta_emissions):
-            beta_tau = discount_factors[idx]
-            if beta_tau <= 0 or np.isclose(emission_delta, 0.0):
-                continue
-            pv_base = discounted_damage_attributed[idx]
-            scc_values[idx] = pv_base / (beta_tau * emission_delta)
-
-    per_year["damage_attributed_usd"] = damage_attributed
-    per_year["discounted_damage_attributed_usd"] = discounted_damage_attributed
-    per_year["scc_usd_per_tco2"] = scc_values
-
-    temperature_reconstructed = temperature_contrib.sum(axis=1)
-    return (
-        per_year,
-        kernel,
-        temperature_contrib,
-        damage_contrib,
-        temperature_delta,
-        temperature_reconstructed,
-    )
-
-
 def _aggregate_scc(per_year: pd.DataFrame, add_tco2: float) -> float:
     discounted_damage = per_year["discounted_delta_usd"].sum()
     if np.isclose(add_tco2, 0.0):
         return float("nan")
     return discounted_damage / add_tco2
-
-
-def compute_scc_constant_discount(
-    inputs: EconomicInputs,
-    *,
-    scenario: str,
-    reference: str,
-    base_year: int,
-    discount_rate: float,
-    aggregation: SCCAggregation,
-    add_tco2: float | None = None,
-    damage_func: DamageFunction = damage_dice,
-    damage_kwargs: Mapping[str, float] | None = None,
-) -> SCCResult:
-    """Compute SCC using a constant discount rate."""
-
-    damage_df = compute_damage_difference(
-        inputs,
-        scenario=scenario,
-        reference=reference,
-        damage_func=damage_func,
-        damage_kwargs=damage_kwargs,
-    )
-
-    factors = _constant_discount_factors(damage_df["year"].to_numpy(), base_year, discount_rate)
-    (
-        per_year,
-        kernel,
-        temperature_contrib,
-        damage_contrib,
-        temperature_delta,
-        temperature_reconstructed,
-    ) = _build_per_year_table(
-        damage_df,
-        scenario=scenario,
-        reference=reference,
-        discount_factors=factors,
-        damage_func=damage_func,
-        damage_kwargs=damage_kwargs,
-        kernel_regularization=float(damage_kwargs.get("_kernel_alpha__", KERNEL_REGULARIZATION))
-        if isinstance(damage_kwargs, dict)
-        else KERNEL_REGULARIZATION,
-        kernel_horizon=int(damage_kwargs.get("_kernel_horizon__", 0))
-        if isinstance(damage_kwargs, dict) and int(damage_kwargs.get("_kernel_horizon__", 0)) > 0
-        else None,
-        kernel_nonnegativity=bool(damage_kwargs.get("_kernel_nonneg__", False))
-        if isinstance(damage_kwargs, dict)
-        else False,
-        kernel_smoothing_lambda=float(damage_kwargs.get("_kernel_smooth__", 0.0))
-        if isinstance(damage_kwargs, dict)
-        else 0.0,
-    )
-
-    total_delta_emissions = per_year["delta_emissions_tco2"].sum()
-    effective_add_tco2 = add_tco2 if add_tco2 is not None else total_delta_emissions
-
-    scc_value = _aggregate_scc(per_year, effective_add_tco2)
-
-    damage_df = damage_df.assign(
-        discount_factor=factors,
-        discounted_delta_usd=per_year["discounted_delta_usd"],
-        temperature_delta_c=temperature_delta,
-        temperature_reconstructed_c=temperature_reconstructed,
-        damage_reconstructed_usd=damage_contrib.sum(axis=1),
-    )
-
-    return SCCResult(
-        method="constant_discount",
-        aggregation=aggregation,
-        scenario=scenario,
-        reference=reference,
-        base_year=base_year,
-        add_tco2=effective_add_tco2,
-        scc_usd_per_tco2=scc_value,
-        per_year=per_year,
-        details=damage_df,
-        temperature_kernel=kernel,
-        run_method="kernel",
-    )
-
-
-def compute_scc_ramsey_discount(
-    inputs: EconomicInputs,
-    *,
-    scenario: str,
-    reference: str,
-    base_year: int,
-    rho: float,
-    eta: float,
-    aggregation: SCCAggregation,
-    add_tco2: float | None = None,
-    damage_func: DamageFunction = damage_dice,
-    damage_kwargs: Mapping[str, float] | None = None,
-) -> SCCResult:
-    """Compute SCC using Ramsey rule discounting."""
-
-    damage_df = compute_damage_difference(
-        inputs,
-        scenario=scenario,
-        reference=reference,
-        damage_func=damage_func,
-        damage_kwargs=damage_kwargs,
-    )
-
-    reference_col = _column("damage_usd", reference)
-    consumption_pc, growth = _compute_consumption_growth(
-        inputs, damage_df[reference_col].to_numpy()
-    )
-
-    factors = _ramsey_discount_factors(
-        damage_df["year"].to_numpy(),
-        base_year,
-        growth,
-        rho=rho,
-        eta=eta,
-    )
-
-    (
-        per_year,
-        kernel,
-        temperature_contrib,
-        damage_contrib,
-        temperature_delta,
-        temperature_reconstructed,
-    ) = _build_per_year_table(
-        damage_df,
-        scenario=scenario,
-        reference=reference,
-        discount_factors=factors,
-        damage_func=damage_func,
-        damage_kwargs=damage_kwargs,
-        kernel_regularization=float(damage_kwargs.get("_kernel_alpha__", KERNEL_REGULARIZATION))
-        if isinstance(damage_kwargs, dict)
-        else KERNEL_REGULARIZATION,
-        kernel_horizon=int(damage_kwargs.get("_kernel_horizon__", 0))
-        if isinstance(damage_kwargs, dict) and int(damage_kwargs.get("_kernel_horizon__", 0)) > 0
-        else None,
-        kernel_nonnegativity=bool(damage_kwargs.get("_kernel_nonneg__", False))
-        if isinstance(damage_kwargs, dict)
-        else False,
-        kernel_smoothing_lambda=float(damage_kwargs.get("_kernel_smooth__", 0.0))
-        if isinstance(damage_kwargs, dict)
-        else 0.0,
-    )
-
-    total_delta_emissions = per_year["delta_emissions_tco2"].sum()
-    effective_add_tco2 = add_tco2 if add_tco2 is not None else total_delta_emissions
-    scc_value = _aggregate_scc(per_year, effective_add_tco2)
-
-    damage_df = damage_df.assign(
-        consumption_per_capita_usd=consumption_pc,
-        consumption_growth=growth,
-        discount_factor=factors,
-        discounted_delta_usd=per_year["discounted_delta_usd"],
-        temperature_delta_c=temperature_delta,
-        temperature_reconstructed_c=temperature_reconstructed,
-        damage_reconstructed_usd=damage_contrib.sum(axis=1),
-    )
-
-    return SCCResult(
-        method="ramsey_discount",
-        aggregation=aggregation,
-        scenario=scenario,
-        reference=reference,
-        base_year=base_year,
-        add_tco2=effective_add_tco2,
-        scc_usd_per_tco2=scc_value,
-        per_year=per_year,
-        details=damage_df,
-        temperature_kernel=kernel,
-        run_method="kernel",
-    )
 
 
 def compute_scc_pulse(
@@ -1214,14 +849,13 @@ def compute_scc_pulse(
         scc_usd_per_tco2=scc_value,
         per_year=per_year,
         details=details,
-        temperature_kernel=None,
         run_method="pulse",
     )
 
 
 def compute_scc(
     inputs: EconomicInputs,
-    method: SCCMethod,
+    method: SCCMethod = "pulse",
     *,
     scenario: str,
     reference: str,
@@ -1236,63 +870,35 @@ def compute_scc(
     discount_method: str | None = None,
     pulse_max_year: int | None = None,
 ) -> SCCResult:
-    """Dispatch SCC computation for the requested method."""
+    """Dispatch SCC computation (pulse method only)."""
 
-    if method == "constant_discount":
-        if discount_rate is None:
-            raise ValueError("discount_rate must be provided for constant discount method")
-        return compute_scc_constant_discount(
-            inputs,
-            scenario=scenario,
-            reference=reference,
-            base_year=base_year,
-            discount_rate=discount_rate,
-            aggregation=aggregation,
-            add_tco2=add_tco2,
-            damage_func=damage_func,
-            damage_kwargs=damage_kwargs,
-        )
-    if method == "ramsey_discount":
-        if rho is None or eta is None:
-            raise ValueError("rho and eta must be provided for Ramsey discount method")
-        return compute_scc_ramsey_discount(
-            inputs,
-            scenario=scenario,
-            reference=reference,
-            base_year=base_year,
-            rho=rho,
-            eta=eta,
-            aggregation=aggregation,
-            add_tco2=add_tco2,
-            damage_func=damage_func,
-            damage_kwargs=damage_kwargs,
-        )
-    if method == "pulse":
-        pulse_discount_method = discount_method
-        if pulse_discount_method is None:
-            if discount_rate is not None:
-                pulse_discount_method = "constant_discount"
-            elif rho is not None and eta is not None:
-                pulse_discount_method = "ramsey_discount"
-        if pulse_discount_method is None:
-            raise ValueError("discount_method must be provided for pulse method")
-        return compute_scc_pulse(
-            inputs,
-            scenario=scenario,
-            reference=reference,
-            base_year=base_year,
-            discount_method=pulse_discount_method,
-            discount_rate=discount_rate,
-            rho=rho,
-            eta=eta,
-            aggregation=aggregation,
-            add_tco2=add_tco2,
-            damage_func=damage_func,
-            damage_kwargs=damage_kwargs,
-            pulse_max_year=pulse_max_year,
-        )
+    if method != "pulse":
+        raise ValueError(f"Unsupported SCC method '{method}'. Only 'pulse' is available.")
 
-    raise ValueError(f"Unsupported SCC method: {method}")
+    pulse_discount_method = discount_method
+    if pulse_discount_method is None:
+        if discount_rate is not None:
+            pulse_discount_method = "constant_discount"
+        elif rho is not None and eta is not None:
+            pulse_discount_method = "ramsey_discount"
+    if pulse_discount_method is None:
+        raise ValueError("discount_method must be provided for pulse method")
+
+    return compute_scc_pulse(
+        inputs,
+        scenario=scenario,
+        reference=reference,
+        base_year=base_year,
+        discount_method=pulse_discount_method,
+        discount_rate=discount_rate,
+        rho=rho,
+        eta=eta,
+        aggregation=aggregation,
+        add_tco2=add_tco2,
+        damage_func=damage_func,
+        damage_kwargs=damage_kwargs,
+        pulse_max_year=pulse_max_year,
+    )
 
 
 __all__ = [
@@ -1302,8 +908,6 @@ __all__ = [
     "compute_damages",
     "compute_damage_difference",
     "compute_scc",
-    "compute_scc_constant_discount",
-    "compute_scc_ramsey_discount",
     "compute_scc_pulse",
     "damage_dice",
 ]

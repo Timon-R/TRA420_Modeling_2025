@@ -40,20 +40,16 @@ This project includes small wrappers around the core modules to make end‑to‑
 - `scripts/run_scc.py`
   - Reads global temperature CSVs and aggregated emissions.
   - Selects the SSP family from the temperature CSVs and auto‑loads GDP/population.
-  - Outputs per‑scenario timeseries and summary tables to `results/economic/`.
+  - Outputs per‑SSP SCC timeseries and per‑scenario damage tables under `results/economic/`.
   - Aggregation:
     - `per_year`: SCC series printed for selected years in the summary tool.
     - `average`: single SCC per method over the configured horizon.
-  - Run methods (`--run-method` or `economic_module.run.method`):
-    - `kernel` – fast kernel-based SCC allocation (default).
-    - `pulse` – definition-faithful FaIR pulses (slower; one discounting method per run).
   - Discounting methods (`--discount-methods` or `economic_module.methods.run`):
     - `constant_discount`, `ramsey_discount` (or both via `all`).
-  - Pulse-mode extras:
-    - Besides the usual `scc_timeseries_<method>_<scenario>.csv`, the script writes
-      `pulse_scc_timeseries_<method>_<scenario>.csv` (per-pulse PV damages + SCC) and
-      `pulse_emission_damages_<method>_<scenario>.csv` (damages from the actual emission
-      delta sequence) to clarify the two calculations.
+  - Pulse workflow outputs:
+    - `pulse_scc_timeseries_<method>_<ssp>.csv` stores the full SCC(τ) path (per SSP) plus the aggregated SCC value.
+    - `results/economic/<mix>/damages_<method>_<scenario>.csv` stores emissions, SCC, and damages
+      for each mix/demand/climate combination (used by the summary module).
 
 ## Summary
 
@@ -71,3 +67,6 @@ This project includes small wrappers around the core modules to make end‑to‑
 
 - `clean_cache.py` — removes `__pycache__`, `.pytest_cache`, `.ruff_cache`, coverage files.
 - `clean_outputs.py` — deletes `results/` (use with caution).
+
+## References
+- [CLI usage patterns]:

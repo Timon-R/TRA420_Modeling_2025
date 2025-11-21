@@ -11,12 +11,15 @@ changes and applying concentration–response functions.
    `calc_emissions.run_from_config`.
 2. **Read concentration statistics** – Country-level baseline concentration
    summaries (mean/median/min/max) are loaded from CSV files in
-   `data/air_pollution/`. Default files now ship with electricity-attributable
-   concentrations and baseline deaths for the Western Balkans, already scaled
-   to reflect that only ~7% of pollution mortality stems from electricity.
-3. **Scale concentrations with emission ratios** – Concentration changes are
-   assumed proportional to the ratio of scenario emissions to baseline
-   emissions for each pollutant.
+   `data/air_pollution/`. Baseline values represent full ambient concentrations,
+   but a configurable electricity-attributable share (default 7%) determines how
+   much of each country's concentration responds to power-sector emission
+   changes. The default share reflects Comply or Close (2021) and EEA's *Every
+   Breath We Take* source split (~40% transport, ~50% households/businesses,
+   ~10% other sources, including electricity).
+3. **Scale concentrations with emission ratios** – Only the electricity share
+   is adjusted in proportion to the ratio of scenario emissions to baseline
+   emissions for each pollutant; the remaining sources remain unchanged.
 4. **Apply health-response coefficients** – Uses log-linear relative risk
    coefficients to estimate the percentage change in mortality.
 5. **Aggregate mortality changes** – Optional baseline mortality inputs convert
@@ -51,37 +54,47 @@ configuration and missing preferences fall back by the configured order.
 ## Key Equations
 
 - **Emission ratio**  
-  $$
+
+$$
 r_{p,t} = \frac{E^{\text{scenario}}_{p,t}}{E^{\text{baseline}}_{p,t}}
 $$
 
-- **Concentration change**  
-  Assuming linear scaling,  
-  $$
-C^{\text{new}}_{c,p,t} = C^{\text{baseline}}_{c,p} \times r_{p,t}, \qquad
-    \Delta C_{c,p,t} = C^{\text{new}}_{c,p,t} - C^{\text{baseline}}_{c,p}
+- **Concentration change with electricity share \(s_{c,p}\)**  
+  Baseline concentrations stay at their full observed values, while only the
+  electricity-attributable share is scaled by the emission ratio:
+
+$$
+C^{\text{new}}_{c,p,t} = C^{\text{baseline}}_{c,p} \left[1 + s_{c,p}(r_{p,t} - 1)\right]
+$$
+
+$$
+\Delta C_{c,p,t} = C^{\text{baseline}}_{c,p} \, s_{c,p} \, (r_{p,t} - 1)
 $$
 
 - **Relative-risk slope**  
   With relative risk `RR` specified for a reference delta `Δ_ref`, the slope is
-  $$
+
+$$
 \beta_p = \frac{\ln(\text{RR}_p)}{\Delta_{\text{ref}, p}}
 $$
 
 - **Percentage change in mortality**  
-  $$
+
+$$
 \Delta m_{c,p,t} = \exp(\beta_p \Delta C_{c,p,t}) - 1
 $$
 
 - **Country weighting**  
-  Weighted average across countries (weights normalised to sum to 1):
-  $$
+Weighted average across countries (weights normalised to sum to 1):
+
+$$
 \overline{\Delta m}_{p,t} = \sum_c w_{c,p} \Delta m_{c,p,t}
 $$
   where per-pollutant weights default to module-level weights or equal weighting.
 
 - **Mortality delta (if baseline deaths supplied)**  
-  $$
+
+$$
 \Delta D_{p,t} = D^{\text{baseline}}_{p} \times \overline{\Delta m}_{p,t}
 $$
 
@@ -89,7 +102,8 @@ $$
   Per-year combined mortality uses normalised pollutant weights `w_p` (default
   equal) applied to the weighted percentage changes, multiplied by the
   module-level baseline deaths:
-  $$
+
+$$
 \Delta m^{\text{total}}_t = \sum_p w_p \overline{\Delta m}_{p,t}, \qquad
     \Delta D^{\text{total}}_t = D^{\text{baseline,total}} \times
     \Delta m^{\text{total}}_t
@@ -108,6 +122,7 @@ $$
 ```yaml
 air_pollution:
   output_directory: results/air_pollution
+  electricity_share: 0.07              # Scalar or {Country: share, default: 0.07}
   concentration_measure: median       # Preferred statistic (median/mean/min/max)
   concentration_fallback_order:
     - median
@@ -119,7 +134,7 @@ air_pollution:
   value_of_statistical_life_usd: 3750000        # Optional VSL (USD per life) for monetising deaths
   pollutants:
     pm25:
-      stats_file: data/air_pollution/PM25_electricity_stats.csv
+      stats_file: data/air_pollution/PM25_country_stats.csv
       relative_risk: 1.08             # RR for the reference concentration delta
       reference_delta: 10.0           # µg/m³ corresponding to the RR value
       # country_weights: {...}        # Optional per-pollutant weighting override
@@ -141,6 +156,12 @@ air_pollution:
 - `country_weights`: accepts `equal` (default) or a mapping `{Country name: weight}`.
   Values are normalised automatically. Per-pollutant `country_weights` override the module-level
   weights.
+- `electricity_share`: scalar fraction applied to every country, or a mapping
+  `{Country: share, default: 0.07}`. Shares are clamped to `[0, 1]`. The default
+  of **0.07** matches Comply or Close's estimate that coal-fired electricity
+  accounts for ≈2,167 out of 30,010 annual pollution deaths across the Western
+  Balkans and remains consistent with EEA's *Every Breath We Take* source
+  decomposition (≈40% transport, ≈50% households/businesses, ≈10% other).
 - `relative_risk` and `reference_delta` can be replaced by `beta` if a slope is
   known directly.
 - `baseline_deaths` can be specified per pollutant and/or at the module level.
@@ -228,6 +249,16 @@ For each scenario and pollutant:
 - `total_mortality_summary.csv` – combined mortality summary when a module-level
   baseline is provided; columns mirror the per-pollutant summary and reflect
   pollutant weights specified in `baseline_deaths.weights`.
+- `<pollutant>_concentration_summary.csv` – per-country concentrations used by
+  downstream modules. Columns:
+  - `year`
+  - `country`
+  - `weight` (normalised aggregation weight)
+  - `baseline_concentration_micro_g_per_m3`
+  - `new_concentration_micro_g_per_m3`
+  - `delta_concentration_micro_g_per_m3`
+  These values keep the full baseline concentration and show the adjusted value
+  after accounting for electricity-sector emission changes.
 
 File layout per scenario:
 
@@ -235,8 +266,10 @@ File layout per scenario:
 results/air_pollution/<scenario>/
   pm25_health_impact.csv
   pm25_mortality_summary.csv        # if per-pollutant baseline provided
+  pm25_concentration_summary.csv
   nox_health_impact.csv
   nox_mortality_summary.csv         # if per-pollutant baseline provided
+  nox_concentration_summary.csv
   total_mortality_summary.csv       # if module-level baseline provided
 ```
 
@@ -274,3 +307,11 @@ The `AirPollutionResult` object also exposes:
   When `value_of_statistical_life_usd` is configured, deaths are multiplied by
   the provided VSL, producing `delta_value_usd` columns in the per-pollutant and
   total mortality summaries.
+
+## References
+- [Relative risks and concentration-response]: Chen et al. (2024) *Long-term NO₂ exposure and mortality* (<https://www.sciencedirect.com/science/article/pii/S0269749123019735>)
+- [Country concentration statistics]: EEA (2024) *Air Pollution Country Fact Sheets* (<https://www.eea.europa.eu/en/topics/in-depth/air-pollution/air-pollution-country-fact-sheets-2024>)
+- [Regulatory context]: CEE Bankwatch (2021) *Comply or Close* (<https://www.complyorclose.org/wp-content/uploads/2021/09/En-COMPLY-OR-CLOSE-web.pdf>)
+- [Ambient air quality background / source shares]: EEA (2013) *Every Breath We Take* (<https://www.eea.europa.eu/en/analysis/publications/eea-signals-2013>) — ~40% transport, ~50% households/business, ~10% other; electricity-attributable share configurable (default 10%).
+- [VSL guidance]: OECD (2012) *Mortality Risk Valuation in Environment, Health and Transport Policies* (<http://dx.doi.org/10.1787/9789264130807-en>)
+- [PPP guidance]: OECD (2023) *Purchasing Power Parities* (<https://www.oecd.org/en/data/indicators/purchasing-power-parities-ppp.html>)

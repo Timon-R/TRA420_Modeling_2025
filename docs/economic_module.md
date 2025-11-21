@@ -105,13 +105,12 @@ factors, and discounted damages in the result details.
   damages, and the SCC(τ) time series. Column highlights:
   - `delta_damage_usd`: damages realized in the reporting year (undiscounted).
   - `discounted_delta_usd`: the same damages expressed in present-value USD for `base_year`.
-  - `damage_attributed_usd`: undiscounted damages allocated to the emission year τ via the kernel/pulse workflow.
-  - `discounted_damage_attributed_usd`: present-value (base-year) damages attributable to the emission year τ.
-  - `scc_usd_per_tco2`: SCC(τ) derived as $ \sum_s β_s \Delta D_{s|\tau} / (β_\tau \Delta E_\tau) $; numerically this equals the emission-year SCC expressed in base-year USD because both numerator and denominator are scaled by the corresponding discount factors.
-  - `pulse_size_tco2`: (pulse mode only) size of the perturbation applied in each pulse run.
+- `damage_attributed_usd`: undiscounted damages allocated to the emission year τ via the pulse workflow.
+- `discounted_damage_attributed_usd`: present-value (base-year) damages attributable to the emission year τ.
+- `scc_usd_per_tco2`: SCC(τ) derived as $ \sum_s β_s \Delta D_{s|\tau} / (β_\tau \Delta E_\tau) $; numerically this equals the emission-year SCC expressed in base-year USD because both numerator and denominator are scaled by the corresponding discount factors.
+- `pulse_size_tco2`: (pulse mode only) size of the perturbation applied in each pulse run.
 - `details`: diagnostics (temperature deltas, damages, discount factors).
-- `temperature_kernel`: temperature impulse response when the kernel method is used.
-- `run_method`: `"kernel"` or `"pulse"` indicating which workflow produced the result.
+- `run_method`: `"pulse"` indicating the FaIR pulse workflow produced the result.
 
 Units: GDP and damages originate from the SSP tables rebased to PPP-2020 dollars, so every SCC value is reported as present-value PPP-2020 USD per tonne CO₂ evaluated at `base_year` (2025 in the default configuration). Adjust the GDP inputs if you need a different currency base.
 
@@ -122,8 +121,7 @@ relationship to report per-emission-year damages for each discounting method.
 
 ### Pulse Method (definition-faithful)
 
-Set `economic_module.run.method: pulse` when you want the textbook SCC(τ).
-The workflow uses the FaIR configuration identified by the `climate_scenario`
+The SCC pipeline always uses the textbook pulse workflow. It reuses the FaIR configuration identified by the `climate_scenario`
 metadata that already backs the temperature inputs—no extra “baseline-only”
 FaIR run is issued. Instead, for each emissions year τ the pipeline prepares a
 box pulse (a +`pulse_size_tco2` top-hat that lasts exactly one calendar year)
@@ -160,54 +158,16 @@ so repeat evaluations avoid re-running FaIR.
 - Slower (one FaIR evaluation per emission year).
 - Only one discounting method can be active per run.
 
-### Kernel Method (impulse-response approximation)
+### Files written by `scripts/run_scc.py`
 
-Set `economic_module.run.method: kernel` for a fast approximation. In plain language:
+Each climate pathway / discount method pair produces:
 
-1. Treat the observed temperature difference as the result of past emission changes
-   filtered through a response curve `g(ℓ)` and solve for that curve via ridge-regularised
-   least squares.
-2. Use `g(ℓ)` to attribute temperature—and therefore damages—to the year the emissions
-   occurred.
-3. Discount and scale exactly as in the pulse method to obtain SCC(τ) (which is expressed in τ-year
-   units; multiply by β_τ for base-year terms if needed).
+| File | Contents | Consumer |
+|------|----------|----------|
+| `pulse_scc_timeseries_<method>_<ssp>.csv` | `year`, discount factor, PV damages attributed to the pulse, per-year `scc_usd_per_tco2`, `pulse_size_tco2`, and the driver scenario’s `delta_emissions_tco2` / `discounted_delta_usd`. | Results summary (SCC columns, plots) |
+| `results/economic/<mix>/damages_<method>_<scenario>.csv` | Scenario-specific emissions, SCC, and monetised damages (Ramsey or constant discount) for every mix/demand/SSP combination. | Results summary (damage columns, plots) |
 
-Diagnostics (reconstruction identity, welfare identity) are logged so you can gauge the
-quality of the fit. If damages are strongly non-linear, consider enabling
-`run.kernel.allocation.linearized_damage` or switching to the pulse workflow for audits.
-
-### Tuning Knobs
-
-Kernel estimation and damage allocation are configurable. Defaults honour the full kernel
-length, a ridge of 1e-6, no smoothing, and non-linear damages.
-
-```yaml
-economic_module:
-  kernel:
-    horizon: null              # Optional integer L; null = full length
-    regularization_alpha: 1.0e-6   # Ridge α added to (CᵀC)
-    nonnegativity: false       # Clip kernel to g(ℓ) ≥ 0
-    smoothing_lambda: 0.0      # Roughness penalty weight
-    allocation:
-      linearized_damage: false # Use ∂D/∂T × ΔTτ instead of full damage diff
-  run:
-    method: kernel             # 'kernel' (fast) or 'pulse' (definition-faithful pulses)
-  methods:
-    run: ramsey_discount       # Discounting choice (constant / ramsey / list)
-    constant_discount:
-      discount_rate: 0.03
-    ramsey_discount:
-      rho: 0.005
-      eta: 1.5
-    pulse:
-      pulse_size_tco2: 1.0e6   # Pulse size when using pulse runs
-```
-
-Notes
-- `regularization_alpha` corresponds to the ridge added to (CᵀC).
-- `horizon` truncates g(ℓ) beyond L lags to reduce variance and noise.
-- `nonnegativity`/`smoothing_lambda` provide physical, regularised kernels.
-- `linearized_damage` enforces additive damages at the cost of ignoring damage curvature.
+These files replace the legacy `scc_summary.csv` and `scc_timeseries_<method>_<scenario>.csv`. Aggregated SCC values now come directly from the pulse files by dividing the discounted damages by cumulative emissions for the driver scenario (the same quantity reported in `SCCResult.scc_usd_per_tco2`).
 
 ### Aggregate SCC
 
@@ -238,9 +198,6 @@ Under `economic_module` in `config.yaml`:
 - `base_year`: PV reference year (must be in the time grid).
 - `aggregation`: `average` or `per_year`.
 - `damage_function`: DICE coefficients and optional threshold/saturation/catastrophe settings.
-- `run.method`: `kernel` or `pulse`.
-- `run.kernel`: tuning for the kernel estimator (`horizon`, `regularization_alpha`, optional `nonnegativity`, `smoothing_lambda`).
-- `run.kernel.allocation.linearized_damage`: toggle numerical ∂D/∂T × ΔTτ allocation.
 - `run.pulse.pulse_size_tco2`: CO₂ amount applied in each pulse year (tonnes).
 - `methods`: discounting configuration (`run` selects constant/Ramsey or list).
 - `emission_to_tonnes`: column unit conversion for emission deltas.
@@ -253,3 +210,7 @@ Under `economic_module` in `config.yaml`:
   `ValueError` is raised.
 - Run the pytest suite (`python -m pytest`) after modifying damage logic or
   discounting to confirm analytic expectations.
+
+## References
+- [GDP/Population (PPP-2017) and conversion factors]: BEA GDPDEF PPP2017→USD2025 factor 1.28 (U.S. Bureau of Economic Analysis, GDPDEF <https://fred.stlouisfed.org/series/GDPDEF>, retrieved Nov 21, 2025)
+- [Socioeconomics DICE method]: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1
