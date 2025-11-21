@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Literal, Mapping
+from typing import Callable, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -18,9 +18,15 @@ from climate_module.scenario_runner import (
     step_change,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 DamageFunction = Callable[..., np.ndarray]
 SCCMethod = Literal["pulse"]
 SCCAggregation = Literal["per_year", "average"]
+
+IIASA_GDP_PPP2023_TO_USD2025 = (
+    1.05  # Source: BEA GDPDEF (FRED GDPDEF series, retrieved Nov 21, 2025).
+)
 
 _PULSE_RESULT_CACHE: dict[
     tuple[str, tuple[int, ...], float, float, float],
@@ -60,108 +66,117 @@ def _infer_ssp_family(climate_id: str) -> str:
     return f"SSP{match.group(1)}"
 
 
-def _load_ssp_table(path: Path, key_column: str, key: str) -> pd.Series:
-    try:
-        df = pd.read_excel(path)
-    except ImportError as exc:  # pragma: no cover - dependency hint
-        raise ImportError(
-            "Reading SSP workbooks requires 'openpyxl'. Install it or provide a "
-            "CSV override via gdp_series."
-        ) from exc
-    if key_column not in df.columns:
-        raise ValueError(f"Expected column '{key_column}' in {path.name}.")
-    df = df.rename(columns={key_column: "key"}).set_index("key")
-    key_upper = key.upper()
-    if key_upper not in df.index:
-        raise ValueError(f"Scenario '{key_upper}' not found in {path.name}.")
-    series = df.loc[key_upper].dropna()
-    series.index = series.index.astype(int)
-    return series.astype(float)
+def _wide_row_to_series(row: pd.Series) -> pd.Series:
+    values: dict[int, float] = {}
+    for column, raw in row.items():
+        column_str = str(column).strip()
+        try:
+            year = int(column_str)
+        except ValueError:
+            continue
+        if isinstance(raw, str) and not raw.strip():
+            continue
+        if pd.isna(raw):
+            continue
+        values[year] = float(raw)
+    if not values:
+        raise ValueError("No year columns found in the IIASA dataset.")
+    series = pd.Series(values).sort_index()
+    return series
+
+
+def _load_iiasa_economic_data(
+    ssp_family: str, directory: Path
+) -> tuple[pd.Series, pd.Series | None]:
+    gdp_csv = directory / "GDP.csv"
+    if not gdp_csv.exists():
+        raise FileNotFoundError(f"Missing IIASA GDP CSV at {gdp_csv}")
+    gdp_df = pd.read_csv(gdp_csv)
+    gdp_df["Scenario_upper"] = gdp_df["Scenario"].str.upper().str.strip()
+    gdp_df["Region_upper"] = gdp_df["Region"].str.upper().str.strip()
+    gdp_row = gdp_df[
+        (gdp_df["Scenario_upper"] == ssp_family.upper()) & (gdp_df["Region_upper"] == "WORLD")
+    ]
+    if gdp_row.empty:
+        raise ValueError(f"Scenario '{ssp_family}' not found in {gdp_csv.name}.")
+    gdp_series = _wide_row_to_series(gdp_row.iloc[0]) / 1000.0  # billions → trillions
+
+    population_csv = directory / "Population.csv"
+    population_series: pd.Series | None = None
+    if population_csv.exists():
+        pop_df = pd.read_csv(population_csv)
+        pop_df["Scenario_upper"] = pop_df["Scenario"].str.upper().str.strip()
+        pop_df["Region_upper"] = pop_df["Region"].str.upper().str.strip()
+        pop_row = pop_df[
+            (pop_df["Scenario_upper"] == ssp_family.upper()) & (pop_df["Region_upper"] == "WORLD")
+        ]
+        if not pop_row.empty:
+            population_series = _wide_row_to_series(pop_row.iloc[0])
+
+    gdp_series = gdp_series.sort_index() * IIASA_GDP_PPP2023_TO_USD2025
+    population_series = None if population_series is None else population_series.sort_index()
+    return gdp_series, population_series
+
+
+def _extend_gdp_frame(
+    frame: pd.DataFrame,
+    target_year: int,
+    *,
+    label: str | None = None,
+) -> pd.DataFrame:
+    if target_year <= int(frame["year"].max()):
+        return frame
+    frame = frame.sort_values("year").reset_index(drop=True)
+    last_row = frame.iloc[-1].copy()
+    start_year = int(last_row["year"])
+    new_rows: list[dict[str, float]] = []
+    for year in range(start_year + 1, target_year + 1):
+        row: dict[str, float] = {
+            "year": year,
+            "gdp_trillion_usd": float(last_row["gdp_trillion_usd"]),
+        }
+        if "population_million" in frame.columns:
+            row["population_million"] = float(last_row.get("population_million", np.nan))
+        new_rows.append(row)
+    if new_rows:
+        LOGGER.info(
+            "Extending GDP/Population series for %s from %s to %s by holding last values.",
+            label or "SSP data",
+            start_year,
+            target_year,
+        )
+        frame = pd.concat([frame, pd.DataFrame(new_rows)], ignore_index=True)
+    return frame
 
 
 def _load_ssp_economic_data(ssp_family: str, directory: Path) -> tuple[pd.Series, pd.Series | None]:
     """Load SSP GDP and population series for the requested family.
 
-    Preference order:
-    1) Long-format CSVs with 2020 PPP GDP and population in millions:
-       - ``SSP_gdp_long_2020ppp.csv`` expects columns: scenario, year, gdp_billion_ppp_2020
-       - ``SSP_population_long.csv`` expects columns: scenario, year, population_millions
-    2) Legacy Excel workbooks ``GDP_SSP1_5.xlsx`` and ``POP_SSP1_5.xlsx``.
-
-    Returns GDP in trillions of USD (PPP-2020) and population in millions.
+    Prefers the IIASA SSP Scenario Explorer extracts (`IIASA/GDP.csv`, `IIASA/Population.csv`).
     """
 
-    family_key = ssp_family.upper().strip()
+    base_dir = Path(directory)
+    candidates = []
+    if (base_dir / "IIASA").is_dir():
+        candidates.append(base_dir / "IIASA")
+    candidates.append(base_dir)
 
-    # Try CSV sources first
-    gdp_csv = directory / "SSP_gdp_long_2020ppp.csv"
-    pop_csv = directory / "SSP_population_long.csv"
-    if gdp_csv.exists():
-        gdp_df = pd.read_csv(gdp_csv, comment="#")
-        if not {"scenario", "year"}.issubset(gdp_df.columns):
-            raise ValueError(f"{gdp_csv.name} must contain 'scenario' and 'year' columns.")
-        # Choose correct GDP column (prefer 2020 PPP). Fall back to 2010 PPP if needed.
-        gdp_col = None
-        if "gdp_billion_ppp_2020" in gdp_df.columns:
-            gdp_col = "gdp_billion_ppp_2020"
-        elif "gdp_billion_ppp_2010" in gdp_df.columns:
-            gdp_col = "gdp_billion_ppp_2010"
-        else:
-            raise ValueError(
-                f"{gdp_csv.name} missing expected GDP column "
-                "('gdp_billion_ppp_2020' or 'gdp_billion_ppp_2010')."
-            )
-        gdp_sel = gdp_df[gdp_df["scenario"].str.upper() == family_key][["year", gdp_col]].copy()
-        if gdp_sel.empty:
-            raise ValueError(f"Scenario '{family_key}' not found in {gdp_csv.name}.")
-        gdp_sel["year"] = gdp_sel["year"].astype(int)
-        gdp_series = (
-            gdp_sel.set_index("year")[gdp_col].astype(float) / 1000.0
-        )  # billions → trillions
+    last_error: Exception | None = None
+    for candidate in candidates:
+        gdp_csv = candidate / "GDP.csv"
+        if gdp_csv.exists():
+            try:
+                return _load_iiasa_economic_data(ssp_family, candidate)
+            except Exception as exc:  # pragma: no cover - propagate to fallback
+                last_error = exc
+                continue
 
-        population_series: pd.Series | None = None
-        if pop_csv.exists():
-            pop_df = pd.read_csv(pop_csv, comment="#")
-            if not {"scenario", "year"}.issubset(pop_df.columns):
-                raise ValueError(f"{pop_csv.name} must contain 'scenario' and 'year' columns.")
-            # Prefer 'population_millions'; fall back to 'population' (persons)
-            pop_col = None
-            if "population_millions" in pop_df.columns:
-                pop_col = "population_millions"
-                scale = 1.0
-            elif "population" in pop_df.columns:
-                pop_col = "population"
-                scale = 1.0 / 1e6  # persons → millions
-            else:
-                raise ValueError(
-                    f"{pop_csv.name} missing expected population column "
-                    "('population_millions' or 'population')."
-                )
-            pop_sel = pop_df[pop_df["scenario"].str.upper() == family_key][["year", pop_col]].copy()
-            if not pop_sel.empty:
-                pop_sel["year"] = pop_sel["year"].astype(int)
-                population_series = pop_sel.set_index("year")[pop_col].astype(float) * scale
-
-        return (
-            gdp_series.sort_index(),
-            None if population_series is None else population_series.sort_index(),
-        )
-
-    # Fallback to legacy Excel workbooks
-    gdp_path = directory / "GDP_SSP1_5.xlsx"
-    pop_path = directory / "POP_SSP1_5.xlsx"
-    if not gdp_path.exists():
-        raise FileNotFoundError(f"Missing GDP dataset: {gdp_csv if gdp_csv.exists() else gdp_path}")
-
-    gdp_series = (
-        _load_ssp_table(gdp_path, "GDP", ssp_family) / 1000.0
-    )  # convert billions to trillions
-
-    population_series: pd.Series | None = None
-    if pop_path.exists():
-        population_series = _load_ssp_table(pop_path, "Population", ssp_family)
-
-    return gdp_series, population_series
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(
+        f"Could not locate IIASA GDP/Population CSVs under {base_dir} "
+        "(expected GDP.csv and Population.csv)."
+    )
 
 
 def _align_series(series: pd.Series, years: Iterable[int]) -> pd.Series:
@@ -258,6 +273,7 @@ class EconomicInputs:
             raise ValueError("Temperature and emission scenario labels must match.")
 
         temp_frames: dict[str, pd.DataFrame] = {}
+        temp_year_bounds: list[tuple[int, int]] = []
         for label, source in temperature_paths.items():
             if isinstance(source, pd.DataFrame):
                 frame = source.copy()
@@ -267,15 +283,22 @@ class EconomicInputs:
                     required_columns={temperature_column},
                     optional_columns={"climate_scenario"},
                 )
-            temp_frames[label] = frame.rename(columns={temperature_column: "temperature_c"})
+            frame = frame.rename(columns={temperature_column: "temperature_c"})
+            temp_frames[label] = frame
+            years = frame["year"].astype(int)
+            temp_year_bounds.append((int(years.min()), int(years.max())))
 
         emission_frames: dict[str, pd.DataFrame] = {}
+        emission_year_bounds: list[tuple[int, int]] = []
         for label, source in emission_paths.items():
             if isinstance(source, pd.DataFrame):
                 frame = source.copy()
             else:
                 frame = _load_yearly_csv(source, required_columns={emission_column})
-            emission_frames[label] = frame.rename(columns={emission_column: "emission_raw"})
+            frame = frame.rename(columns={emission_column: "emission_raw"})
+            emission_frames[label] = frame
+            years = frame["year"].astype(int)
+            emission_year_bounds.append((int(years.min()), int(years.max())))
 
         climate_scenarios = _extract_climate_scenarios(temp_frames)
         if not climate_scenarios:
@@ -313,6 +336,14 @@ class EconomicInputs:
                 gdp_data_frame[population_column] = population_series.loc[
                     gdp_data_frame["year"]
                 ].to_numpy()
+            other_bounds = temp_year_bounds + emission_year_bounds
+            if other_bounds:
+                target_end = min(bound[1] for bound in other_bounds)
+                gdp_data_frame = _extend_gdp_frame(
+                    gdp_data_frame,
+                    target_end,
+                    label=ssp_family,
+                )
         else:
             if gdp_path is None:
                 raise ValueError("Provide either gdp_path, gdp_frame, or gdp_population_directory.")
@@ -448,6 +479,7 @@ def damage_dice(
     *,
     delta1: float = 0.0,
     delta2: float = 0.002,
+    custom_terms: Sequence[Mapping[str, float]] | None = None,
     # Threshold amplification
     use_threshold: bool = False,
     threshold_temperature: float = 3.0,
@@ -466,7 +498,9 @@ def damage_dice(
 ) -> np.ndarray:
     """Return GDP damage fractions using a configurable DICE-style function.
 
-    The baseline follows ``delta1 * T + delta2 * T^2``. Optional extensions:
+    The baseline follows ``delta1 * T + delta2 * T^2`` unless ``custom_terms`` is
+    supplied, in which case damage is computed as ``Σ coeff_i × T^{power_i}``.
+    Optional extensions:
 
     - ``use_threshold`` scales damages once temperature exceeds
       ``threshold_temperature`` (power-law amplification).
@@ -477,7 +511,16 @@ def damage_dice(
     """
 
     temperatures = np.asarray(temp, dtype=float)
-    damage = delta1 * temperatures + delta2 * temperatures**2
+    if custom_terms:
+        damage = np.zeros_like(temperatures, dtype=float)
+        for term in custom_terms:
+            if not isinstance(term, Mapping):
+                continue
+            coeff = float(term.get("coefficient", 0.0))
+            power = float(term.get("exponent", term.get("power", 1.0)))
+            damage = damage + coeff * np.power(temperatures, power)
+    else:
+        damage = delta1 * temperatures + delta2 * temperatures**2
 
     if use_threshold:
         amplify = (

@@ -22,7 +22,7 @@ from calc_emissions.scenario_io import (
     split_scenario_name,
 )
 from config_paths import apply_results_run_directory, get_results_run_directory
-from economic_module.scc import _load_ssp_economic_data
+from economic_module.scc import _load_ssp_economic_data, damage_dice
 from economic_module.socioeconomics import DiceSocioeconomics
 
 LOGGER = logging.getLogger("results.summary")
@@ -57,6 +57,7 @@ class SummarySettings:
     air_pollution_country_baseline: dict[str, float] = field(default_factory=dict)
     air_pollution_countries: list[str] = field(default_factory=list)
     air_pollution_vsl: float | None = None
+    damage_function_cfg: Mapping[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -337,7 +338,11 @@ def _collect_socio_series(
     socio_cfg = config.get("socioeconomics", {}) or {}
     scenario_list = list(scenario_labels)
     if not scenario_list:
-        return None, None
+        fallback_climates = sorted({label for label in climate_labels if label})
+        if fallback_climates:
+            scenario_list = [f"socio_{label}" for label in fallback_climates]
+        else:
+            scenario_list = ["socio_default"]
 
     gdp_series_path = _resolve_path(root, economic_cfg.get("gdp_series"), run_directory)
     gdp_population_dir = economic_cfg.get("gdp_population_directory")
@@ -374,6 +379,7 @@ def _collect_socio_series(
                 gdp_map[scenario] = dict(gdp_base)
                 if pop_base is not None:
                     pop_map[scenario] = dict(pop_base)
+            _extend_socio_maps(gdp_map, pop_map, plot_end)
             return gdp_map or None, pop_map or None
 
         socio_mode = str(socio_cfg.get("mode", "")).strip().lower()
@@ -391,6 +397,7 @@ def _collect_socio_series(
                     gdp_map[scenario] = gdp_series
                 if population_series:
                     pop_map[scenario] = population_series
+            _extend_socio_maps(gdp_map, pop_map, plot_end)
             return gdp_map or None, pop_map or None
 
         for scenario in scenario_list:
@@ -409,7 +416,58 @@ def _collect_socio_series(
         LOGGER.warning("Unable to load socioeconomics series: %s", exc)
         return None, None
 
+    _extend_socio_maps(gdp_map, pop_map, plot_end)
     return gdp_map or None, pop_map or None
+
+
+def _extend_socio_maps(
+    gdp_map: dict[str, dict[int, float]],
+    pop_map: dict[str, dict[int, float]],
+    target_year: int,
+) -> None:
+    for series in gdp_map.values():
+        _extend_series_to_year(series, target_year)
+    for series in pop_map.values():
+        _extend_series_to_year(series, target_year)
+
+
+def _extend_series_to_year(series: dict[int, float], target_year: int) -> None:
+    if not series:
+        return
+    years_sorted = sorted(series.keys())
+    initial_last = years_sorted[-1]
+    # Interpolate between known points
+    for idx in range(len(years_sorted) - 1):
+        y0 = years_sorted[idx]
+        y1 = years_sorted[idx + 1]
+        v0 = series[y0]
+        v1 = series[y1]
+        span = y1 - y0
+        if span <= 1:
+            continue
+        slope = (v1 - v0) / span
+        for year in range(y0 + 1, y1):
+            if year not in series:
+                series[year] = v0 + slope * (year - y0)
+    years_sorted = sorted(series.keys())
+    last_value = series[years_sorted[-1]]
+    if target_year > initial_last:
+        LOGGER.info(
+            "Extending socioeconomics series from %s to %s by holding values constant.",
+            initial_last,
+            target_year,
+        )
+    for year in range(years_sorted[-1] + 1, max(target_year, years_sorted[-1]) + 1):
+        if year in series:
+            last_value = series[year]
+        else:
+            series[year] = last_value
+    if years_sorted[-1] < target_year:
+        LOGGER.info(
+            "Extending socioeconomics series from %s to %s by holding values constant.",
+            years_sorted[-1],
+            target_year,
+        )
 
 
 def _project_dice_series(
@@ -1061,12 +1119,11 @@ def build_summary(
             temperature_delta = _read_temperature(temperature_path, years)
             temperature_series = _load_temperature_series(temperature_path)
 
-            conversion = 1.0
             socio_cfg = config.get("socioeconomics", {}) if isinstance(config, Mapping) else {}
             conv_cfg = (
                 socio_cfg.get("currency_conversion", {}) if isinstance(socio_cfg, Mapping) else {}
             )
-            conversion = float(conv_cfg.get("ppp2017_to_usd2025", 1.0))
+            conversion = float(conv_cfg.get("usd_2017_to_2025", 1.0))
 
             damages, scc_values, damage_totals, damages_full, scc_full = _read_scc_timeseries(
                 scc_output_dir,
@@ -1185,6 +1242,11 @@ def build_summary(
         air_pollution_country_baseline=air_country_baseline,
         air_pollution_countries=air_country_list,
         air_pollution_vsl=air_vsl,
+        damage_function_cfg=(
+            economic_cfg.get("damage_function", {})
+            if isinstance(economic_cfg.get("damage_function"), Mapping)
+            else economic_cfg.get("damage_function")
+        ),
     )
     settings.per_country_emission_root = _default_per_country_root(config, root, run_directory)
 
@@ -1701,6 +1763,7 @@ def _plot_scc_timeseries(
             label_candidates = sorted(auto_labels)
     if not label_candidates:
         label_candidates = ["default"]
+    methods = list(methods)
     for method in methods:
         curves: list[tuple[list[int], list[float], str]] = []
         for climate in label_candidates:
@@ -1735,14 +1798,15 @@ def _plot_scc_timeseries(
         fig, ax = plt.subplots(figsize=(7, 4.5))
         for years, values, label in curves:
             ax.plot(years, values, marker="o", linewidth=1.6, label=label)
-        ax.set_xlabel("Year")
-        ax.set_ylabel("SCC (PPP USD-2025 discounted to year per tCO₂)")
-        ax.set_title(f"SCC Timeseries ({method})")
+        ax.set_xlabel("t (Year)")
+        ax.set_ylabel("SCC (PPP USD-2025 per tCO₂, discounted to t)")
+        ax.set_title("SCC(t)")
         ax.grid(True, linestyle="--", alpha=0.3)
         ax.legend()
         fig.tight_layout()
+        filename = "scc_timeseries" if len(methods) == 1 else f"scc_timeseries_{method}"
         fig.savefig(
-            output_dir / f"scc_timeseries_{method}.{settings.plot_format}",
+            output_dir / f"{filename}.{settings.plot_format}",
             format=settings.plot_format,
         )
         plt.close(fig)
@@ -1774,6 +1838,7 @@ def write_plots(
 
     # SCC timeseries per method/SSP (single PNG per method)
     _plot_scc_timeseries(settings, methods, metrics_map)
+    _plot_damage_function(settings)
 
     def _collect_by_mix(attr: str, method: str | None = None):
         data: dict[str, dict[str, dict[str, dict[int, float]]]] = {}
@@ -1905,6 +1970,41 @@ def _plot_socioeconomic_timeseries(settings: SummarySettings) -> None:
         plots_dir / f"socioeconomics.{settings.plot_format}",
         format=settings.plot_format,
     )
+    plt.close(fig)
+
+
+def _plot_damage_function(settings: SummarySettings) -> None:
+    cfg = settings.damage_function_cfg
+    if not isinstance(cfg, Mapping) or not cfg:
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping damage-function plot")
+        return
+
+    plots_dir = settings.output_directory / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_copy = dict(cfg)
+    max_temp = float(cfg_copy.pop("plot_max_temperature", 8.0) or 8.0)
+    max_temp = max(1.0, max_temp)
+    temps = np.linspace(0.0, max_temp, 400)
+    try:
+        fractions = damage_dice(temps, **cfg_copy)
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Unable to plot damage function: %s", exc)
+        return
+    fractions = np.clip(fractions, 0.0, 1.0)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(temps, fractions * 100.0, linewidth=2.0, color="#C0504D")
+    ax.set_xlabel("T (°C)")
+    ax.set_ylabel("Damage (% of GDP)")
+    ax.set_title("Damage Function")
+    ax.grid(True, alpha=0.3, linestyle="--")
+    fig.tight_layout()
+    fig.savefig(plots_dir / f"damage_function.{settings.plot_format}", format=settings.plot_format)
     plt.close(fig)
 
 

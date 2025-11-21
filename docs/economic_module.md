@@ -25,9 +25,15 @@ regardless of the reporting cadence in the source CSVs.
 
 When temperature CSVs include the `climate_scenario` column exported by the climate module,
 the loader infers the SSP family (SSP1–SSP5) and automatically imports matching GDP and
-population projections from `gdp_population_directory` (expects `GDP_SSP1_5.xlsx` and
-`POP_SSP1_5.xlsx`, readable via pandas + openpyxl). Provide `gdp_series` only if you need to override the SSP tables with
-custom economic trajectories.
+population projections from `gdp_population_directory` (defaults to the IIASA Scenario Explorer
+extracts under `data/GDP_and_Population_data/IIASA/{GDP,Population}.csv`). The IIASA tables end in
+2100; the SCC evaluation window is therefore truncated to that year unless you switch to the DICE
+mode to synthesize longer trajectories. Provide `gdp_series` only if you need to override the
+IIASA tables with custom economic trajectories.
+
+Set `socioeconomics.mode: ssp` (default) to use the IIASA datasets matched to the climate
+scenario’s SSP family automatically. Switch to `mode: dice` when you want the endogenous DICE
+projections described below.
 
 ### DICE socioeconomics mode
 
@@ -59,6 +65,28 @@ with optional extensions:
   - Step: add `disaster_fraction` when $ T \ge T_\text{cat} $
   - Probabilistic: add based on $ 1 - e^{-\gamma \max(0, T - T_\text{cat})} $
 
+### Custom polynomial coefficients
+
+Instead of the default quadratic baseline, you can supply a list of arbitrary
+coefficients/exponents via `damage_function.custom_terms`. Each term is applied as
+`coefficient × T^exponent`. For example, to implement `D = 0.01202·T + 0.01724·T^{1.5}`:
+
+```yaml
+economic_module:
+  damage_function:
+    custom_terms:
+      - coefficient: 0.01202
+        exponent: 1.0
+      - coefficient: 0.01724
+        exponent: 1.5
+    use_threshold: false
+    use_saturation: false
+```
+
+All other options (threshold amplification, saturation, catastrophic add-ons) work
+in combination with `custom_terms`. If `custom_terms` is omitted, the baseline reverts
+to `delta1 * T + delta2 * T^2`.
+
 Configuration keys in `config.yaml` > `economic_module.damage_function`
 activate and tune these features.
 
@@ -71,34 +99,25 @@ activate and tune these features.
 
 ## Discounting Methods
 
-### Constant Discount
+The codebase now supports a single SCC method — the definition-faithful pulse workflow —
+but two discounting families can be applied within that workflow:
 
-Discount factors:  
-$ F_t = (1 + r)^{-(t - t_0)} $ for $ t \ge t_0 $, else 0.
+- **Constant discount** — provide `discount_rate` and the pulse run applies  
+  $ F_t = (1 + r)^{-(t - t_0)} $ to each year $ t \ge t_0 $ (else 0). This is the
+  familiar fixed-rate PV calculation. The aggregated SCC divides the discounted
+  damages by the cumulative emission delta (or `add_tco2` override).
+- **Ramsey discount** — provide `rho` and `eta`. Consumption per capita is derived
+  from GDP minus damages, growth is  
+  $ g_t = (C_t - C_{t-1})/C_{t-1} $, and discount factors evolve via  
+  $ F_{t+1} = F_t / (1 + \rho + \eta g_{t+1}) $. Population data is therefore required.
 
-`compute_scc_constant_discount` applies factors to incremental damages and
-divides by cumulative emission deltas (or `add_tco2` override) to obtain SCC.
-
-### Ramsey Discount
-
-Requires population data to compute consumption per capita:
-
-$$
-C_t = \max(GDP_t - \text{damage}_t, 0) \\
- g_t = \frac{C_t - C_{t-1}}{C_{t-1}}
-$$
-
-Discount factors evolve as:
-$$
-F_{t+1} = \frac{F_t}{1 + \rho + \eta g_{t+1}}
-$$
-
-`compute_scc_ramsey_discount` stores per-year consumption growth, discount
-factors, and discounted damages in the result details.
+Both schemes share the same pulse machinery; only the discount factors differ.
+`SCCResult.details` records the per-year discount factor and discounted damages used in
+each calculation so you can audit the PV steps.
 
 ## SCC Outputs
 
-`compute_scc_*` return `SCCResult` containing:
+`compute_scc` (pulse-only) returns `SCCResult` containing:
 
 - `scc_usd_per_tco2`: aggregated SCC value (PV of Δ damages ÷ cumulative Δ emissions).
 - `per_year`: emission-year table with emissions, damages, discount factors, attributed PV
@@ -108,11 +127,17 @@ factors, and discounted damages in the result details.
 - `damage_attributed_usd`: undiscounted damages allocated to the emission year τ via the pulse workflow.
 - `discounted_damage_attributed_usd`: present-value (base-year) damages attributable to the emission year τ.
 - `scc_usd_per_tco2`: SCC(τ) derived as $ \sum_s β_s \Delta D_{s|\tau} / (β_\tau \Delta E_\tau) $; numerically this equals the emission-year SCC expressed in base-year USD because both numerator and denominator are scaled by the corresponding discount factors.
-- `pulse_size_tco2`: (pulse mode only) size of the perturbation applied in each pulse run.
+- `pulse_size_tco2`: size of the perturbation applied in each pulse run (from `run.pulse`).
 - `details`: diagnostics (temperature deltas, damages, discount factors).
 - `run_method`: `"pulse"` indicating the FaIR pulse workflow produced the result.
 
-Units: GDP and damages originate from the SSP tables rebased to PPP-2020 dollars, so every SCC value is reported as present-value PPP-2020 USD per tonne CO₂ evaluated at `base_year` (2025 in the default configuration). Adjust the GDP inputs if you need a different currency base.
+Units: GDP and damages originate from the IIASA tables (reported in 2023 PPP USD). The loader applies
+the BEA GDPDEF conversion factor (1.05) to express them in PPP USD-2025, so every SCC value is
+reported as present-value PPP-2025 USD per tonne CO₂ evaluated at `base_year` (2025 in the default
+configuration). The annual SCC series (`scc_usd_per_tco2` column in the timeseries files) is
+discounted to the emission year τ; the summary converts those values into PPP_USD_2025 but keeps the
+“discounted-to-year” interpretation explicit in the column names. Adjust the GDP inputs if you need
+a different currency base or exchange benchmark.
 
 Because emissions are stored in tonnes of CO₂ after applying `emission_to_tonnes`
 (default $10^6$ converts Mt → t), any downstream multiplication of SCC × ΔE produces
@@ -150,24 +175,16 @@ per pulse year (each call bundles the baseline+pulse pair). Pulse size is contro
 `run.pulse.pulse_size_tco2`. Results are cached across runs with identical pulse settings
 so repeat evaluations avoid re-running FaIR.
 
-**Pros**
-- Exact by definition (discounted marginal damages for the emission year).
-- Handles non-linear damages and FaIR state dependence naturally.
-
-**Cons**
-- Slower (one FaIR evaluation per emission year).
-- Only one discounting method can be active per run.
-
 ### Files written by `scripts/run_scc.py`
 
 Each climate pathway / discount method pair produces:
 
 | File | Contents | Consumer |
 |------|----------|----------|
-| `pulse_scc_timeseries_<method>_<ssp>.csv` | `year`, discount factor, PV damages attributed to the pulse, per-year `scc_usd_per_tco2`, `pulse_size_tco2`, and the driver scenario’s `delta_emissions_tco2` / `discounted_delta_usd`. | Results summary (SCC columns, plots) |
-| `results/economic/<mix>/damages_<method>_<scenario>.csv` | Scenario-specific emissions, SCC, and monetised damages (Ramsey or constant discount) for every mix/demand/SSP combination. | Results summary (damage columns, plots) |
+| `results/economic/pulse_scc_timeseries_<method>_<ssp>.csv` | `year`, discount factor, PV damages attributed to the pulse, per-year `scc_usd_per_tco2`, `pulse_size_tco2`, emission deltas, and `discounted_delta_usd`. | Results summary (SCC columns + plots) |
+| `results/economic/<mix>/damages_<method>_<scenario>.csv` | Scenario-specific emissions, SCC, and monetised damages (Ramsey or constant discount) for every mix/demand/SSP combination. | Results summary (damage columns + plots) |
 
-These files replace the legacy `scc_summary.csv` and `scc_timeseries_<method>_<scenario>.csv`. Aggregated SCC values now come directly from the pulse files by dividing the discounted damages by cumulative emissions for the driver scenario (the same quantity reported in `SCCResult.scc_usd_per_tco2`).
+Legacy `scc_summary.csv` / `scc_timeseries_<method>_<scenario>.csv` files have been removed. Aggregated SCC values come directly from the pulse files (they are identical to `SCCResult.scc_usd_per_tco2`).
 
 ### Aggregate SCC
 
@@ -182,9 +199,9 @@ The average SCC (used when `aggregation: average`) retains the familiar ratio:
 
 CLI wrapper `scripts/run_scc.py` orchestrates:
 
-- Loading temperature/emission CSVs (labels must match).
-- Selecting reference/target scenarios.
-- Choosing methods: `constant_discount`, `ramsey_discount`, or both.
+- Loading temperature/emission CSVs (labels must match) and inferring the SSP family.
+- Selecting reference/target scenarios (all demand cases of every mix by default).
+- Choosing discount methods: `constant_discount` and/or `ramsey_discount` (pulse workflow only).
 - Applying damage settings from config or CLI overrides (`--damage-*` flags).
 
 ## Configuration Summary
@@ -194,10 +211,11 @@ Under `economic_module` in `config.yaml`:
 - `output_directory`: SCC result tables.
 - `gdp_series`: path to GDP (+ optional population) CSV.
 - `temperature_series`, `emission_series`: scenario label → CSV path.
-- `reference_scenario`, `evaluation_scenarios`: default evaluation set.
+- `reference_scenario`, `evaluation_scenarios`: default evaluation set (overridden when running via the full pipeline, which loops through all mix/demand cases automatically).
 - `base_year`: PV reference year (must be in the time grid).
 - `aggregation`: `average` or `per_year`.
 - `damage_function`: DICE coefficients and optional threshold/saturation/catastrophe settings.
+- `run.pulse`: pulse size (tCO₂) and optional pulse horizon; the CLI caches per-SSP results so repeated runs reuse pulse data when the inputs match.
 - `run.pulse.pulse_size_tco2`: CO₂ amount applied in each pulse year (tonnes).
 - `methods`: discounting configuration (`run` selects constant/Ramsey or list).
 - `emission_to_tonnes`: column unit conversion for emission deltas.
@@ -212,5 +230,6 @@ Under `economic_module` in `config.yaml`:
   discounting to confirm analytic expectations.
 
 ## References
-- [GDP/Population (PPP-2017) and conversion factors]: BEA GDPDEF PPP2017→USD2025 factor 1.28 (U.S. Bureau of Economic Analysis, GDPDEF <https://fred.stlouisfed.org/series/GDPDEF>, retrieved Nov 21, 2025)
+
+- [GDP/Population conversion]: U.S. Bureau of Economic Analysis, Gross Domestic Product: Implicit Price Deflator (GDPDEF), retrieved via Federal Reserve Bank of St. Louis (FRED), used to convert IIASA GDP PPP-2023 to PPP USD-2025 with factor 1.05.
 - [Socioeconomics DICE method]: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1

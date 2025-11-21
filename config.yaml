@@ -61,9 +61,9 @@ climate_module:
       co2_species_name: CO2
       ch4_lifetime_label: historical_best
   climate_scenarios:
-    run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
-      - ssp245
-      - ssp370  
+    run: all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
+      #- ssp245
+      #- ssp370  
     definitions:
       - id: ssp119
         label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
@@ -121,7 +121,7 @@ air_pollution:
       reference_delta: 10.0
 
 socioeconomics:
-  mode: dice
+  mode: dice  # Options: 'ssp' (use IIASA SSP GDP/POP tables) or 'dice' (generate DICE trajectories).
   dice: #source: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1
     start_year: 2019
     scenario: as_climate_scenario  # 'as_climate_scenario' mirrors the climate SSP; replace with explicit SSP tag to lock it.
@@ -141,7 +141,8 @@ socioeconomics:
       initial_stock_trillions: null
     capital_share: 0.36507
   currency_conversion:
-    ppp2017_to_usd2025: 1.28  # Source: BEA GDPDEF (https://fred.stlouisfed.org/series/GDPDEF, retrieved Nov 21, 2025)
+    usd_2017_to_2025: 1.28  # Source: BEA GDPDEF (https://fred.stlouisfed.org/series/GDPDEF, retrieved Nov 21, 2025)
+    usd_2023_to_2025: 1.05  # Source: U.S. Bureau of Economic Analysis, GDPDEF via FRED (retrieved Nov 21, 2025)
 
 economic_module:
   output_directory: results/economic
@@ -168,6 +169,11 @@ economic_module:
   damage_function:
     delta1: 0.0
     delta2: 0.00236
+    # custom_terms:
+    #   - coefficient: 0.01202
+    #     exponent: 1.0
+    #   - coefficient: 0.01724
+    #     exponent: 1.5
     use_threshold: false
     threshold_temperature: 3.0
     threshold_scale: 0.2

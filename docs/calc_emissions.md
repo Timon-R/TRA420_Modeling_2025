@@ -133,8 +133,16 @@ produce the same per-country folder layout as the `scripts/run_calc_emissions_al
 aggregator.
 
 ## References
- - [Emission factors and technology intensities]: Emission factors for CO2, NOx, SOx, PM2.5 and GWP100 for the different production technologies were taken from ecoinvent Version 3.10.1, Allocation cut-off by classification (cutoff) (Wernet et al., 2016) on a country basis. 
- 
-Wernet, G., Bauer, C., Steubing, B., Reinhard, J., Moreno-Ruiz, E., and Weidema, B., 2016. The ecoinvent database version 3 (part I): overview and methodology. The International Journal of Life Cycle Assessment, [online] 21(9), pp.1218–1230. Available at: <http://link.springer.com/10.1007/s11367-016-1087-8> [Accessed 21 10 2025].
 
-[Electricity mix sources]: 
+### Emission factors and technology intensities
+
+- Emission factors for CO₂, NOₓ, SOₓ, PM₂.₅, and GWP100 were sourced from *ecoinvent* v3.10.1 (allocation cut-off by classification).  
+  Wernet, G., Bauer, C., Steubing, B., Reinhard, J., Moreno-Ruiz, E., & Weidema, B. (2016). *The ecoinvent database version 3 (part I): overview and methodology.* The International Journal of Life Cycle Assessment, 21(9), 1218–1230. <http://link.springer.com/10.1007/s11367-016-1087-8> (accessed 21 Oct 2025).
+
+### Electricity mix sources
+
+- Republic of Serbia (2022). *Integrated National Energy and Climate Plan of the Republic of Serbia.*
+- Ministry of Ecology, Sustainable Development and Development of the North (Montenegro) (2024). *Draft National Energy and Climate Plan of Montenegro (NECP Montenegro – All chapters, 13 Dec 2024).*
+- Energy Community Secretariat (2023). *Recommendations on the Draft Integrated National Energy and Climate Plan of Bosnia and Herzegovina.*
+- Energy Community Secretariat (2022). *Kosovo’s National Energy and Climate Plan (NECP).*
+- Ministry of Infrastructure and Energy of Albania (2024). *National Energy and Climate Plan of the Republic of Albania.*
