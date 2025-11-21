@@ -5,6 +5,7 @@ channels:
 dependencies:
   - python>=3.11
   - pip>=23
+  - pyyaml>=6.0.3
   # Core numerical stack (fill in as modules are implemented)
   - numpy>=1.26
   - pandas>=2.1
