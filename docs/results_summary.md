@@ -1,24 +1,23 @@
 # Results Summary
 
-Collects cross‑module indicators and produces a concise overview (tabular CSV plus optional plots).
+Collects cross‑module indicators and produces a concise overview (tabular CSV plus optional plots) for every `(energy mix, demand case, climate scenario)` combination. Demand cases are stored as `base_demand`, `scen1_lower`, `scen1_mean`, `scen1_upper`, and the summary iterates over every mix listed in the emissions output directory.
 
 ## What It Aggregates
 
-- Emission deltas (Mt CO₂) per selected years.
-- Temperature deltas (°C) per selected years.
-- Mortality impacts (per‑pollutant totals and combined), if the air‑pollution module ran.
+- Emission deltas (Mt CO₂) and other pollutants per selected years, both aggregated across all countries and per country/pollutant combination.
+- Temperature deltas (°C) per selected years (global + pattern-scaled per country).
+- Air-pollution results when available: mortality differences, mortality percent changes (percentage points), monetary benefits, concentration deltas (µg/m³) averaged across countries, and per-country concentration deltas.
 - SCC results by method:
   - Per-year SCC series at configured years when `aggregation: per_year`. Values are
-    reported in PPP USD-2025 discounted to the evaluation year (column name
+    reported in PPP USD-2025, discounted to the emission year (column name
     `SCC_<method>_<year>_PPP_USD_2025_discounted_to_year_per_tco2`).
   - Average SCC when `aggregation: average` (uses the configured horizon).
-- Damages derived from SCC × emission deltas for each discounting method. For Ramsey
-  discounting this uses the present-value SCC (base-year USD) multiplied by the
-  emission-year delta (converted to tonnes), so the reported damages are base-year USD
-  PV of the lifetime impact caused by the emissions in that year.
+- Damages derived from SCC × emission deltas for each discounting method. This multiplies the base-year SCC with the emission-year delta (converted to tonnes), yielding PV damages denominated in PPP-2020 USD (base year reported in the column name).
 
 To reduce duplication, plots that do not vary by climate pathway are de‑duplicated:
-- Emission deltas and mortality plots collapse SSP suffixes; each base scenario appears once.
+- Emission deltas, mortality deltas, mortality values, and non-CO₂ plots collapse SSP suffixes; each mix-demand combination appears once with a shaded envelope for `scen1_lower`/`scen1_upper`.
+- Temperature and SCC plots retain SSP suffixes because results vary by pathway.
+- A single SCC plot (`plots/scc_timeseries.png`) shows SCC trajectories for each SSP over the entire time horizon.
 
 ## Configuration (`results.summary` in `config.yaml`)
 
@@ -26,7 +25,7 @@ To reduce duplication, plots that do not vary by climate pathway are de‑duplic
 results:
   run_directory: null        # Optional: set 'experiment_A' to write to results/experiment_A/…
   summary:
-    years: [2030, 2050]     # Reported years in the CSV and plots
+    years: [2030, 2050]      # Reported years in the CSV and plots
     year_period:
       - {start: 2025, end: 2050}    # Optional period sums for damages/mortality
     output_directory: results/summary
@@ -52,35 +51,33 @@ air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted f
 
 ## Outputs
 
-- `summary.csv` — a wide table where each row represents an emission scenario + climate pathway
-  combination. Columns include:
-  - `energy_mix`, `climate_scenario`, `demand_case` (`base_demand`, `scen1_lower`, `scen1_mean`, `scen1_upper`).
-  - For every configured year: `delta_co2_Mt_all_countries_<year>`, `delta_T_C_<year>`,
-    `air_pollution_mortality_difference_all_countries_<year>`,
-    `air_pollution_mortality_percent_change_all_countries_<year>` (percentage points),
-    optional `air_pollution_monetary_benefit_all_countries_usd_<year>`,
-    `SCC_<method>_<year>_PPP_USD_2025_discounted_to_year_per_tco2`
-    (or `scc_average_<method>` when averaging), and
-    `damages_PPP2020_usd_baseyear_<base_year>_<method>_<year>`.
-    When air-pollution concentration files are available, the summary also includes
-    `air_pollution_concentration_delta_<pollutant>_microgram_per_m3_all_countries_<year>`
-    columns plus per-country concentration deltas
-    (`air_pollution_concentration_delta_<pollutant>_<Country>_microgram_per_m3_<year>`).
-  - For `year_period` ranges, sums are added as `air_pollution_mortality_difference_sum_<start>_to_<end>`,
-    `air_pollution_monetary_benefit_sum_all_countries_usd_<start>_to_<end>`, and
-    `damages_PPP2020_usd_baseyear_<base_year>_sum_<method>_<start>_to_<end>`.
-  - Per-country pollutant deltas aggregated directly from `results/emissions/<mix>/<Country>/<pollutant>.csv`
-    (e.g., `delta_co2_Serbia_2030`, `delta_pm25_Bosnia_and_Herzegovina_2050`) and pattern-scaled
-    temperature deltas (`delta_T_<ISO3>_<year>` from `results/climate_scaled`).
-  This replaces the previous text/JSON outputs and is consumed by downstream notebooks directly.
-- `plots/` — grouped bar charts for emission deltas, temperature deltas,
-  damages, SCC (one per method), and mortality metrics; plus emission and
-  temperature timeseries charts.
-- SCC results are sourced from the SSP-level `pulse_scc_timeseries_<method>_<ssp>.csv`
-  files written by `scripts/run_scc.py`; each row combines the SCC(τ) timeseries and the
-  aggregated SCC value for that climate pathway.
-- When the pulse method is used, `plots/` also receives `scc_timeseries_<method>.png`
-  showing SCC(τ) by scenario (one line per climate pathway).
+- `summary.csv` — a wide table where each row represents a unique `(energy_mix, demand_case, climate pathway)` combination. Column order matches the user's requested priority:
+  1. `energy_mix`, `climate_scenario`, `demand_case`.
+  2. `delta_co2_Mt_all_countries_<year>` plus per-country pollutant deltas (`delta_<pollutant>_<Country>_<year>`).
+  3. `delta_<pollutant>_<unit>_all_countries_<year>` for NOx, SO₂, PM₂.₅, etc.
+  4. `delta_T_C_<year>` and `delta_T_<ISO3>_<year>`.
+  5. SCC columns `SCC_<method>_<year>_PPP_USD_2025_discounted_to_year_per_tco2` (or `scc_average_<method>`).
+  6. Damages columns `damages_PPP2020_usd_baseyear_<base_year>_<method>_<year>` and horizon sums (`damages_PPP2020_usd_baseyear_<base_year>_sum_<method>_<start>_to_<end>`).
+  7. Air-pollution metrics:
+     - `air_pollution_mortality_difference_all_countries_<year>` (deaths/year),
+     - `air_pollution_mortality_percent_change_all_countries_<year>` (percentage points),
+     - `air_pollution_monetary_benefit_all_countries_usd_<year>`,
+     - concentration deltas averaged across countries
+       (`air_pollution_concentration_delta_<pollutant>_microgram_per_m3_all_countries_<year>`),
+       and per-country concentration deltas
+       (`air_pollution_concentration_delta_<pollutant>_<Country>_microgram_per_m3_<year>`),
+     - optional sums `air_pollution_mortality_difference_sum_all_countries_<start>_to_<end>` and
+       `air_pollution_monetary_benefit_sum_all_countries_usd_<start>_to_<end>`.
+  8. Socioeconomic snapshots for the configured `years`.
+  Per-country pollutant deltas and concentration deltas are pulled directly from
+  `results/<run>/emissions/<mix>/<Country>/<pollutant>.csv` and
+  `results/<run>/air_pollution/<scenario>/<pollutant>_concentration_summary.csv`.
+- `plots/` — contains:
+  - `scc_timeseries.png` (SCC vs time for each SSP).
+  - Background climate and socioeconomics panels.
+  - One folder per mix containing emissions, mortality, concentration, and damage plots across the full horizon (annual resolution from the configured time grid) with shaded envelopes for `scen1_lower`/`scen1_upper`.
+- SCC results are sourced from the SSP-level `results/economic/pulse_scc_timeseries_<method>_<ssp>.csv`
+  files written by `scripts/run_scc.py`; each row combines the SCC(τ) timeseries and the aggregated SCC value for that climate pathway.
 
 ## SCC Display Rules
 

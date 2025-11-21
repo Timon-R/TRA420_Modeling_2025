@@ -309,6 +309,7 @@ The `AirPollutionResult` object also exposes:
   total mortality summaries.
 
 ## References
+
 - [Relative risks and concentration-response]: Chen et al. (2024) *Long-term NO₂ exposure and mortality* (<https://www.sciencedirect.com/science/article/pii/S0269749123019735>)
 - [Country concentration statistics]: EEA (2024) *Air Pollution Country Fact Sheets* (<https://www.eea.europa.eu/en/topics/in-depth/air-pollution/air-pollution-country-fact-sheets-2024>)
 - [Regulatory context]: CEE Bankwatch (2021) *Comply or Close* (<https://www.complyorclose.org/wp-content/uploads/2021/09/En-COMPLY-OR-CLOSE-web.pdf>)

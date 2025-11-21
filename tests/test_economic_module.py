@@ -49,6 +49,17 @@ def test_compute_damages_returns_expected_columns(sample_inputs: EconomicInputs)
     np.testing.assert_allclose(damages, expected)
 
 
+def test_damage_dice_custom_terms():
+    temps = np.array([1.0, 2.0, 3.0])
+    coefficients = [
+        {"coefficient": 0.01202, "exponent": 1.0},
+        {"coefficient": 0.01724, "exponent": 1.5},
+    ]
+    damages = damage_dice(temps, delta1=0.0, delta2=0.0, custom_terms=coefficients)
+    expected = 0.01202 * temps + 0.01724 * temps**1.5
+    np.testing.assert_allclose(damages, expected)
+
+
 def test_compute_damage_difference(sample_inputs: EconomicInputs):
     df = compute_damage_difference(sample_inputs, scenario="policy", reference="baseline")
     assert "delta_damage_usd" in df.columns

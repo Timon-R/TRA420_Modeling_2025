@@ -532,9 +532,9 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
         "--gdp-population-directory",
         default=gdp_pop_dir_default,
         help=(
-            "Directory with SSP GDP/Population data. Prefers long-format CSVs "
-            "(SSP_gdp_long_2020ppp.csv, SSP_population_long.csv); falls back to "
-            "Excel (GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx)."
+            "Directory with SSP GDP/Population data. Defaults to the IIASA Scenario "
+            "Explorer extracts (`IIASA/GDP.csv`, `IIASA/Population.csv`) under "
+            "data/GDP_and_Population_data."
         ),
     )
     parser.add_argument(

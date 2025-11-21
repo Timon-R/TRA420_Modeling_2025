@@ -13,21 +13,20 @@ temperature responses, and evaluating local/global impact metrics such as the So
   - `air_pollution/` — maps non-CO₂ deltas to concentration-driven health impacts.
   - `economic_module/` — SCC utilities (damages, discounting, reporting).
   - `pattern_scaling/` — pattern-scaling of global responses to country trajectories.
-  - *(planned)* `impacts/`, `ui/`, `common/` packages that will divide the workflow into focused modules as they arrive.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
 - `data/` — input datasets (raw and processed). Includes `calc_emissions/` (country configs and
   emission factors), air-pollution statistics, GDP/Population tables, and pattern-scaling factors.
   The canonical Excel workbooks for electricity mixes and technology intensities
   (`Electricity_OECD.xlsx`, `Emission_factors_all.xlsx`) now live under
   `data/calc_emissions/`.
-- `results/` — generated outputs like emission mixes (`results/emissions/<mix>/<Country>/` and `results/emissions/All_countries/<mix>/`), climate CSVs, and summary tables (ignored by Git).
+- `results/` — generated outputs. Emissions live under `results/<run>/emissions/<mix>/<Country>/` (per-country) plus `results/<run>/emissions/All_countries/<mix>/`. All downstream modules reuse the same `<run>` prefix so each experiment (set via `run.output_subdir`) keeps its own climate, air-pollution, economic, and summary folders.
 - `tests/` — pytest suite covering emissions, climate, economic, and pattern-scaling modules.
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
 - `pyproject.toml` — project metadata plus Ruff lint/format configuration.
 - `.gitignore` — excludes generated results and other artifacts.
 - `README.md` — usage guidance and development conventions.
- - `docs/` — module documentation and CLI guides (`economic_module.md`, `climate_module.md`, `pattern_scaling.md`, `air_pollution.md`, `results_summary.md`, `scripts.md`).
+- `docs/` — module documentation and CLI guides (`economic_module.md`, `climate_module.md`, `pattern_scaling.md`, `air_pollution.md`, `results_summary.md`, `scripts.md`).
 
 ## Getting Started
 
@@ -48,17 +47,27 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 ### Electricity emissions per country
 
-Run the calculator for one country (writes deltas under `results/emissions/per_country/<Country>/`). Country names correspond to `config_<name>.yaml` files in `data/calc_emissions/countries/`:
+Run the calculator for one country (writes per-country deltas under `results/<run>/emissions/<mix>/<Country>/`). Country names correspond to `config_<name>.yaml` files in `data/calc_emissions/countries/`:
 
 ```bash
 python scripts/run_calc_emissions.py --country Albania
 ```
 
-Valid names match config filenames (underscores instead of spaces), e.g. `Serbia`, `Bosnia-Herzegovina`, `North_Macedonia`, `Kosovo`, `Montenegro`.
+Valid names match config filenames (underscores instead of spaces), e.g. `Serbia`, `Bosnia-Herzegovina`, `North_Macedonia`, `Kosovo`, `Montenegro`. Scenario names follow the pattern `<mix_case>__<demand_case>` where the demand case is one of `base_demand`, `scen1_lower`, `scen1_mean`, or `scen1_upper`. Downstream modules derive their worklists from these names—keep the structure when creating new cases.
+
+Need to call the per-country writer programmatically? Import it from `calc_emissions.writers`:
+
+```python
+from calc_emissions.writers import write_per_country_results
+
+write_per_country_results(per_country_map, Path("results/my_run/emissions"))
+```
+
+`per_country_map` must follow `{Country: {scenario_name: EmissionScenarioResult}}` which is the structure returned by `run_calc_emissions.py`.
 
 ### Aggregate emissions across all countries
 
-Compute deltas for all countries and write the sum by mix to `results/emissions/All_countries/<mix>/co2.csv` (with per-demand columns):
+Compute deltas for all countries and write the sum by mix to `results/<run>/emissions/All_countries/<mix>/co2.csv` (with per-demand columns):
 
 ```bash
 python scripts/run_calc_emissions_all.py
@@ -78,7 +87,7 @@ Options:
   python scripts/run_calc_emissions_all.py --output results/emissions/All_countries_custom --results-output results/emissions/All_countries_custom_copy
   ```
 
-Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `sox.csv`, `pm25.csv`, and `gwp100.csv` when available) with `absolute_*`/`delta_*` columns for each demand case. The list of country configs, scenario filter, and the default aggregate output directories are configurable via the `calc_emissions.countries` block in `config.yaml`.
+Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `so2.csv`, `pm25.csv`, and `gwp100.csv` when available) with `absolute_*`/`delta_*` columns for each demand case. The list of country configs, scenario filter, and the default aggregate output directories are configurable via the `calc_emissions.countries` block in `config.yaml`.
 
 ### Full end-to-end run
 
@@ -90,12 +99,27 @@ python scripts/run_full_pipeline.py
 
 Typical workflow (driven by `config.yaml`):
 
-1. **Emissions** – `python scripts/run_calc_emissions.py --country <name>` (per-country deltas) or `python scripts/run_calc_emissions_all.py` (aggregated deltas); run before downstream modules so `results/emissions/<mix>/<Country>/` and `results/emissions/All_countries/<mix>/` hold current data.
-2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate mortality percentage changes.
-3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv`. Each CSV now includes a `climate_scenario` column. The run also produces background baseline CSVs (`background_climate_full.csv`, `background_climate_horizon.csv`) plus plots written directly to `results/summary/plots` so downstream SCC runs and the final summary share the same reference trajectory.
-4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
-5. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
-6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles key indicators and plots. Emission and mortality plots collapse SSP suffixes (identical across climate pathways), while SCC and temperature remain pathway-specific. The summary plot folder now also mirrors the background climate graphics and adds a `socioeconomics.png` panel showing the GDP/population trajectories used in the SCC calculations.
+1. **Emissions** – `python scripts/run_calc_emissions.py --country <name>` (per-country deltas) or `python scripts/run_calc_emissions_all.py` (aggregated deltas); run before downstream modules so `results/<run>/emissions/<mix>/<Country>/` and `results/<run>/emissions/All_countries/<mix>/` hold current data.
+2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate concentration changes, mortality percentage changes, absolute deaths, and monetary benefits (per pollutant and aggregated).
+3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/<run>/climate/*.csv`. Each CSV includes a `climate_scenario` column, and the run also produces background baseline CSVs (`background_climate_full.csv`, `background_climate_horizon.csv`) for plotting/reference.
+4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country temperature deltas under `results/<run>/climate_scaled`.
+5. **Economics (pulse SCC only)** – `python scripts/run_scc.py` infers the SSP family from the climate CSVs, builds socioeconomics (SSP tables or DICE mode), and evaluates the SCC via the FaIR pulse workflow once per climate scenario/discount method. Outputs include `pulse_scc_timeseries_<method>_<ssp>.csv` plus per-mix damages (`results/<run>/economic/<mix>/damages_<method>_<scenario>.csv`).
+6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles emissions, climate, SCC, damages, and air-pollution metrics into `results/<run>/summary/summary.csv` and generates mix-specific plots with lower/mean/upper envelopes. A shared `plots/scc_timeseries.png` shows SCC trajectories by SSP.
+
+### Summary outputs
+
+The summary CSV stores one row per `(energy_mix, demand_case, climate_scenario)` combination with column groups in the following order:
+
+1. **Scenario descriptors** – `energy_mix`, `climate_scenario`, `demand_case`.
+2. **Headline emissions** – `delta_co2_Mt_all_countries_<year>` plus per-country pollutant deltas.
+3. **Other pollutants** – aggregated `delta_<pollutant>_<unit>_all_countries_<year>` columns.
+4. **Temperature** – global `delta_T_C_<year>` and pattern-scaled `delta_T_<ISO3>_<year>`.
+5. **SCC** – `SCC_<method>_<year>_PPP_USD_2025_discounted_to_year_per_tco2` or `scc_average_<method>`.
+6. **Damages** – `damages_PPP2020_usd_baseyear_<base_year>_<method>_<year>` plus `year_period` sums when configured.
+7. **Air pollution** – `air_pollution_mortality_difference_all_countries_<year>`, `air_pollution_mortality_percent_change_all_countries_<year>` (percentage points), monetary benefits, concentration deltas averaged and per country (µg/m³), along with optional period sums (`air_pollution_mortality_difference_sum_all_countries_<start>_to_<end>`).
+8. **Socioeconomics** – GDP/population snapshots backing the SCC calculations.
+
+Plots live in `results/<run>/summary/plots/`. Mix-specific folders contain emissions, mortality, concentration, and damage timeseries with shaded envelopes for `scen1_lower`/`scen1_upper`. The main folder contains background climate graphics, socioeconomics, and an SCC timeseries plot showing every SSP over the full horizon.
 
 ### Named runs & scenario suites
 
@@ -111,7 +135,9 @@ Typical workflow (driven by `config.yaml`):
 
 ## Socioeconomics & FaIR calibration
 
-- The new `socioeconomics` block in `config.yaml` (default mode `dice`) replaces the old SSP lookup with a DICE-style projection. Population follows logistic growth using scenario-specific asymptotes, total factor productivity declines gradually, and capital evolves via DICE’s savings/depreciation rules. These trajectories feed directly into `run_scc.py` without relying on external GDP/POP workbooks.
+- The new `socioeconomics` block in `config.yaml` (default mode `dice`) replaces the old SSP lookup with a DICE-style projection. Population follows logistic growth using scenario-specific asymptotes, total factor productivity declines gradually, and capital evolves via DICE’s savings/depreciation rules. These trajectories feed directly into `run_scc.py`.
+- The IIASA GDP/Population tables bundled in `data/GDP_and_Population_data/IIASA/` end at 2100. To analyze horizons beyond that, switch `socioeconomics.mode` to `dice`, which synthesizes GDP/POP series for the entire damage window.
+- Set `socioeconomics.mode: ssp` (default) when you prefer empirical pathways: the SCC runner will pull GDP and population from the IIASA Scenario Explorer extracts shipped under `data/GDP_and_Population_data/IIASA/`.
 - The climate module now supports calibrated FaIR runs via `climate_module.fair.calibration`. Provide the local calibration dataset once (this repo ships `data/FaIR_calibration_data/v1.5.0`) and the runner will:
   - pick the requested posterior ensemble member,
   - replace FaIR’s carbon-cycle pools, CH₄ lifetime terms, and F₂× forcing with the calibrated values,
@@ -128,81 +154,6 @@ python -m pytest
 ```
 
 Individual modules can be exercised via `python -m pytest tests/test_calc_emissions.py` (or similar) when iterating quickly. Continuous integration expects the full suite to pass before changes are submitted.
-### Electricity emissions per country
-
-Run the calculator for one country (writes deltas under `results/emissions/per_country/<Country>/`). Country names correspond to `config_<name>.yaml` files in `data/calc_emissions/countries/`:
-
-```bash
-python scripts/run_calc_emissions.py --country Albania
-```
-
-Valid names match config filenames (underscores instead of spaces), e.g. `Serbia`, `Bosnia-Herzegovina`, `North_Macedonia`, `Kosovo`, `Montenegro`.
-
-Programmatic API
------------------
-
-If you prefer to call the per-country writer from other Python code (for example
-in tests or custom orchestration), import the helper from the `src` package:
-
-```python
-from calc_emissions.writers import write_per_country_results
-
-# per_country_map should be: { CountryName: { scenario_name: EmissionScenarioResult } }
-write_per_country_results(per_country_map, Path("results/emissions"))
-```
-
-This produces the same `results/emissions/<mix>/<Country>/<pollutant>.csv` layout used by the
-aggregator script and is a stable import for other modules.
-
-### Aggregate emissions across all countries
-
-Compute deltas for all countries and write the sum by mix to `results/emissions/All_countries/<mix>/co2.csv` (with per-demand columns):
-
-```bash
-python scripts/run_calc_emissions_all.py
-```
-
-Options:
-
-- Restrict to specific countries:
-
-  ```bash
-  python scripts/run_calc_emissions_all.py --countries Albania Serbia
-  ```
-
-- Choose a different output directory or mirror results elsewhere:
-
-  ```bash
-  python scripts/run_calc_emissions_all.py --output results/emissions/All_countries_custom --results-output results/emissions/All_countries_custom_copy
-  ```
-
-Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `sox.csv`, `pm25.csv`, and `gwp100.csv` when available) with `absolute_*`/`delta_*` columns. The list of country configs, scenario filter, and the default aggregate output directories are configurable via the `calc_emissions.countries` block in `config.yaml`.
-
-### Full end-to-end run
-
-To execute emissions, climate, pattern scaling, air-pollution and SCC modules in a single command (using the defaults from `config.yaml`):
-
-```bash
-python scripts/run_full_pipeline.py
-```
-
-Typical workflow (driven by `config.yaml`):
-
-1. **Emissions** – `python scripts/run_calc_emissions.py --country <name>` (per-country deltas) or `python scripts/run_calc_emissions_all.py` (aggregated deltas); run before downstream modules so `results/emissions/<mix>/<Country>/` and `results/emissions/All_countries/<mix>/` hold current data.
-2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate mortality percentage changes.
-3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/climate/*.csv`. Each CSV now includes a `climate_scenario` column.
-4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country files under `pattern_scaling.output_directory`.
-5. **Economics** – `python scripts/run_scc.py` auto-selects the SSP GDP/population series based on `climate_scenario` and evaluates discounting methods configured in `config.yaml`.
-6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles key indicators and plots. Emission and mortality plots collapse SSP suffixes (identical across climate pathways), while SCC and temperature remain pathway‑specific.
-
-## Testing
-
-Install development dependencies and run the pytest suite from the project root:
-
-```bash
-pip install -e '.[dev]'
-python -m pytest
-```
 
 Individual modules can be exercised via `python -m pytest tests/test_calc_emissions.py` (or similar) when iterating quickly. Continuous integration expects the full suite to pass before changes are submitted.
 
@@ -310,7 +261,7 @@ All runtime settings live in `config.yaml`.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.
   - `damage_function` now supports optional threshold amplification, smooth saturation, and catastrophic add-ons in addition to the DICE quadratic terms (`delta1`, `delta2`). Tune behaviour via keys such as `use_threshold`, `threshold_temperature`, `use_saturation`, `max_fraction`, `use_catastrophic`, and related parameters (see `config.yaml`).
   - Per-year SCC is computed with definition-faithful FaIR pulses (one FaIR evaluation per emission year) so the reported SCC(τ) is exact for the chosen discounting method; see `docs/economic_module.md` for details.
-  - Temperature CSVs export a `climate_scenario` column; the SCC runner reads it to select the matching SSP GDP/population series from `gdp_population_directory` (workbooks `GDP_SSP1_5.xlsx` and `POP_SSP1_5.xlsx`). Set `gdp_series` to a custom CSV only when overriding the SSP datasets.
+  - Temperature CSVs export a `climate_scenario` column; the SCC runner reads it to select the matching SSP GDP/population series from `gdp_population_directory` (defaults to the IIASA Scenario Explorer extracts in `data/GDP_and_Population_data/IIASA/{GDP,Population}.csv`). At load time the GDP series is scaled by the BEA GDPDEF conversion factor (1.05) to express values in PPP USD-2025. Provide `gdp_series` only when overriding the IIASA tables.
   - `damage_duration_years` extends the SCC damage window beyond the shared time horizon (starting at the global start year); datasets must supply values through the requested end year, and the climate module reuses the last available emission delta during the tail.
   - `data_sources.emission_root` and `data_sources.temperature_root` should target the intermediate `results/` products (`results/emissions/All_countries/<mix>/co2.csv` and `results/climate/<scenario>_<climate>.csv`). Scenario names now use the format `<mix>__<demand>` (e.g. `base_mix__scen1_upper`). Climate pathways default to the SSPs enabled under `climate_module.climate_scenarios.run`; specify `economic_module.data_sources.climate_scenarios` only when you need to override that list.
   - When `aggregation` is set to `average`, provide `aggregation_horizon` (`start`, `end`) to bound the averaging window. The CLI enforces this so you always know which portion of the timeline feeds the aggregate SCC.
@@ -347,7 +298,7 @@ All runtime settings live in `config.yaml`.
   - Configure discounting under `economic_module.methods` and provide GDP/emission inputs.
   - `damage_function` now supports optional threshold amplification, smooth saturation, and catastrophic add-ons in addition to the DICE quadratic terms (`delta1`, `delta2`). Tune behaviour via keys such as `use_threshold`, `threshold_temperature`, `use_saturation`, `max_fraction`, `use_catastrophic`, and related parameters (see `config.yaml`).
   - Per-year SCC is computed with definition-faithful FaIR pulses (one FaIR evaluation per emission year) so the reported SCC(τ) is exact for the chosen discounting method; see `docs/economic_module.md` for details.
-  - Temperature CSVs export a `climate_scenario` column; the SCC runner reads it to select the matching SSP GDP/population series from `gdp_population_directory` (workbooks `GDP_SSP1_5.xlsx` and `POP_SSP1_5.xlsx`). Set `gdp_series` to a custom CSV only when overriding the SSP datasets.
+  - Temperature CSVs export a `climate_scenario` column; the SCC runner reads it to select the matching SSP GDP/population series from `gdp_population_directory` (defaults to the IIASA Scenario Explorer extracts in `data/GDP_and_Population_data/IIASA/{GDP,Population}.csv`). At load time the GDP series is scaled by the BEA GDPDEF conversion factor (1.05) to express values in PPP USD-2025. Provide `gdp_series` only when overriding the IIASA tables.
   - `damage_duration_years` extends the SCC damage window beyond the shared time horizon (starting at the global start year); datasets must supply values through the requested end year, and the climate module reuses the last available emission delta during the tail.
   - `data_sources.emission_root` and `data_sources.temperature_root` should target the intermediate `results/` products (`results/emissions/All_countries/<mix>/co2.csv` and `results/climate/<scenario>_<climate>.csv`). Scenario names follow `<mix>__<demand>`. Climate pathways default to the SSPs enabled under `climate_module.climate_scenarios.run`; specify `economic_module.data_sources.climate_scenarios` only when overriding that list.
   - When `aggregation` is set to `average`, provide `aggregation_horizon` (`start`, `end`) to bound the averaging window. The CLI enforces this so you always know which portion of the timeline feeds the aggregate SCC.

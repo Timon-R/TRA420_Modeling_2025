@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import importlib
 import logging
 import math
 import os
 import re
-import shutil
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -17,7 +15,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping
 
-import pandas as pd
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -253,61 +250,6 @@ def _infer_metric_years(metrics: Mapping[str, object]) -> list[int]:
     return sorted(keys)
 
 
-def _determine_summary_fields(records: list[dict[str, object]]) -> list[str]:
-    preferred_order = [
-        "suite",
-        "suite_scenario",
-        "model_scenario",
-        "policy_scenario",
-        "climate_label",
-        "year",
-        "run_directory",
-        "emission_delta_mt",
-        "temperature_delta_c",
-        "mortality_delta",
-        "mortality_percent",
-        "mortality_baseline",
-        "mortality_value_delta",
-    ]
-    seen = set()
-    ordered = []
-    for field in preferred_order:
-        if any(field in record for record in records):
-            ordered.append(field)
-            seen.add(field)
-    dynamic = sorted(key for record in records for key in record if key not in seen)
-    return ordered + dynamic
-
-
-def _extract_summary_rows(
-    summary_csv_path: str,
-    suite_name: str,
-    suite_scenario: str,
-    run_directory: str | None,
-) -> list[dict[str, object]]:
-    if not summary_csv_path:
-        return []
-    path = Path(summary_csv_path)
-    if not path.exists():
-        LOGGER.warning("Summary CSV missing for scenario '%s': %s", suite_scenario, path)
-        return []
-    try:
-        df = pd.read_csv(path)
-    except Exception as exc:  # pragma: no cover - defensive
-        LOGGER.error("Unable to read summary CSV %s: %s", path, exc)
-        return []
-    records: list[dict[str, object]] = []
-    for _, row in df.iterrows():
-        record = {
-            "suite": suite_name,
-            "suite_scenario": suite_scenario,
-            "run_directory": run_directory or "",
-        }
-        record.update(row.to_dict())
-        records.append(record)
-    return records
-
-
 @contextmanager
 def _use_config_path(path: Path):
     previous = os.environ.get(CONFIG_ENV_VAR)
@@ -398,7 +340,6 @@ def _run_scenario_suite(
 
     suite_name = sanitize_run_directory(scenario_path.stem) or "scenarios"
     suite_run_dir = _resolve_suite_directory(base_config, run_cfg, suite_name)
-    aggregate_records: list[dict[str, object]] = []
 
     scenario_items = list(scenario_overrides.items())
     LOGGER.info(
@@ -427,42 +368,17 @@ def _run_scenario_suite(
             scenario_name,
             final_run_dir or "<default>",
         )
-        summary_info = _execute_config_run(config_copy, f"{suite_name}_{scenario_name}", base_root)
-        summary_csv_path = summary_info.get("summary_csv", "")
-        rows = _extract_summary_rows(
-            summary_csv_path,
-            suite_name,
-            scenario_name,
-            summary_info.get("run_directory", final_run_dir or ""),
-        )
-        if rows:
-            aggregate_records.extend(rows)
-        else:
-            aggregate_records.append(
-                {
-                    "suite": suite_name,
-                    "suite_scenario": scenario_name,
-                    "run_directory": summary_info.get("run_directory", final_run_dir or ""),
-                }
-            )
+        _execute_config_run(config_copy, f"{suite_name}_{scenario_name}", base_root)
 
     suite_rel = suite_run_dir or suite_name
-    suite_dir = (ROOT / "results" / suite_rel) if suite_rel else (ROOT / "results")
-    suite_dir.mkdir(parents=True, exist_ok=True)
-    summary_csv = suite_dir / "scenario_suite_summary.csv"
-    fieldnames = _determine_summary_fields(aggregate_records)
-    with summary_csv.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(aggregate_records)
-    dest_scenario_file = suite_dir / scenario_path.name
-    if not dest_scenario_file.exists():
-        shutil.copyfile(scenario_path, dest_scenario_file)
-    LOGGER.info(
-        "Scenario suite '%s' complete. Aggregate summary: %s",
-        suite_name,
-        summary_csv.relative_to(ROOT),
-    )
+    if suite_rel:
+        LOGGER.info(
+            "Scenario suite '%s' complete. Individual results stored under 'results/%s'.",
+            suite_name,
+            suite_rel,
+        )
+    else:
+        LOGGER.info("Scenario suite '%s' complete.", suite_name)
 
 
 def main() -> None:
