@@ -164,5 +164,5 @@ Python code, import `climate_module.scenario_runner.run_scenarios` and provide
   regression workflows due to run-time cost.
 
 ## References
-- [FaIR model and calibration files]: Smith, C. (2025). fair calibration data (1.5.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.17392386
 
+- [FaIR model and calibration files]: Smith, C. (2025). fair calibration data (1.5.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.17392386

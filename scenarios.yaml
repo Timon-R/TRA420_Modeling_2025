@@ -1,4 +1,4 @@
-default_calibration: {}  # No additional overrides – serves as reference run within the suite.
+baseline_dice_default: {}  # Default configuration reference run.
 
 philosopher_discount:
   economic_module:
@@ -7,3 +7,193 @@ philosopher_discount:
       ramsey_discount:
         rho: 0.0075
         eta: 1
+
+damage_custom_poly_no_features:
+  economic_module:
+    damage_function:
+      mode: custom
+      custom_terms:
+        - coefficient: 0.01202
+          exponent: 1.0
+        - coefficient: 0.01724
+          exponent: 1.5
+      use_threshold: false
+      use_saturation: false
+      use_catastrophic: false
+
+damage_threshold_temp_3_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_temperature: 3.0
+
+damage_threshold_temp_4_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_temperature: 4.0
+
+damage_threshold_temp_5_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_temperature: 5.0
+
+damage_catastrophic_temp_3_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      catastrophic_temperature: 3.0
+
+damage_catastrophic_temp_4_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      catastrophic_temperature: 4.0
+
+damage_catastrophic_temp_5_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      catastrophic_temperature: 5.0
+
+damage_disaster_mode_step_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_mode: step
+
+damage_disaster_mode_prob_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_mode: prob
+
+damage_saturation_mode_rational_sat_on:
+  economic_module:
+    damage_function:
+      use_saturation: true
+      saturation_mode: rational
+
+damage_saturation_mode_clamp_sat_on:
+  economic_module:
+    damage_function:
+      use_saturation: true
+      saturation_mode: clamp
+
+damage_delta2_0p00236:
+  economic_module:
+    damage_function:
+      delta2: 0.00236
+
+damage_delta2_0p005:
+  economic_module:
+    damage_function:
+      delta2: 0.005
+
+damage_delta2_0p01:
+  economic_module:
+    damage_function:
+      delta2: 0.01
+
+damage_disaster_fraction_0p5_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_fraction: 0.5
+
+damage_disaster_fraction_0p75_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_fraction: 0.75
+
+damage_disaster_fraction_0p9_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_fraction: 0.9
+
+damage_disaster_fraction_0p95_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_fraction: 0.95
+
+damage_max_fraction_0p5_saturation_on:
+  economic_module:
+    damage_function:
+      use_saturation: false
+      max_fraction: 0.5
+
+damage_max_fraction_0p75_saturation_on:
+  economic_module:
+    damage_function:
+      use_saturation: false
+      max_fraction: 0.75
+
+damage_max_fraction_0p99_saturation_on:
+  economic_module:
+    damage_function:
+      use_saturation: false
+      max_fraction: 0.99
+
+damage_threshold_scale_0p1_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_scale: 0.1
+
+damage_threshold_scale_0p2_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_scale: 0.2
+
+damage_threshold_scale_0p3_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_scale: 0.3
+
+damage_threshold_scale_0p5_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_scale: 0.5
+
+damage_threshold_power_1p0_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_power: 1.0
+
+damage_threshold_power_2p0_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_power: 2.0
+
+damage_threshold_power_3p0_threshold_on:
+  economic_module:
+    damage_function:
+      use_threshold: true
+      threshold_power: 3.0
+
+damage_disaster_gamma_1p0_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_gamma: 1.0
+
+damage_disaster_gamma_2p0_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_gamma: 2.0
+
+damage_disaster_gamma_3p0_cat_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      disaster_gamma: 3.0

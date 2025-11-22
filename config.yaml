@@ -1,5 +1,5 @@
 run:
-  mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  mode: scenarios  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
   output_subdir: test  # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
@@ -61,8 +61,8 @@ climate_module:
       co2_species_name: CO2
       ch4_lifetime_label: historical_best
   climate_scenarios:
-    run: all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
-      #- ssp245
+    run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
+      - ssp245
       #- ssp370  
     definitions:
       - id: ssp119
@@ -123,77 +123,79 @@ air_pollution:
 socioeconomics:
   mode: dice  # Options: 'ssp' (use IIASA SSP GDP/POP tables) or 'dice' (generate DICE trajectories).
   dice: #source: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1
-    start_year: 2019
-    scenario: as_climate_scenario  # 'as_climate_scenario' mirrors the climate SSP; replace with explicit SSP tag to lock it.
+    start_year: 2019  # Earliest year for capital/population dynamics (pre-base spin-up).
+    scenario: as_climate_scenario  # SSP driving DICE projections; mirrors active climate SSP by default.
     population:
-      initial_population_million: 7713.47
-      logistic_growth: 0.028
-      asymptote_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv
+      initial_population_million: 7713.47  # Global population in the start year (millions).
+      logistic_growth: 0.028  # Logistic growth rate governing the approach to the asymptote.
+      asymptote_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv  # CSV with SSP-specific population asymptotes.
     tfp:
-      initial_level_label: nordhaus
-      decline_rate: 0.005
-      scenario_growth_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv
-      initial_levels_table_path: data/GDP_and_Population_data/DICE/dice_tfp_initial_levels.csv
+      initial_level_label: nordhaus  # Label in dice_tfp_initial_levels.csv for the starting TFP level.
+      decline_rate: 0.005  # Exogenous decline in TFP growth per year.
+      scenario_growth_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv  # CSV containing SSP-specific TFP growth.
+      initial_levels_table_path: data/GDP_and_Population_data/DICE/dice_tfp_initial_levels.csv  # CSV mapping labels to initial TFP levels.
     capital:
-      depreciation_rate: 0.0369791
-      savings_rate: 0.223
-      capital_output_ratio: 3.41
-      initial_stock_trillions: null
-    capital_share: 0.36507
+      depreciation_rate: 0.0369791  # Annual depreciation rate for the capital stock.
+      savings_rate: 0.223  # Fraction of output reinvested each year.
+      capital_output_ratio: 3.41  # Output-to-capital ratio (K/Y) used in production.
+      initial_stock_trillions: null  # Initial capital stock (trillion USD); null solves from steady state.
+    capital_share: 0.36507  # Labour-share complement (α) in the Cobb–Douglas production function.
   currency_conversion:
-    usd_2017_to_2025: 1.28  # Source: BEA GDPDEF (https://fred.stlouisfed.org/series/GDPDEF, retrieved Nov 21, 2025)
-    usd_2023_to_2025: 1.05  # Source: U.S. Bureau of Economic Analysis, GDPDEF via FRED (retrieved Nov 21, 2025)
+    usd_2017_to_2025: 1.28  # PPP GDP deflator to convert 2017 USD to 2025 USD (BEA GDPDEF).
+    usd_2023_to_2025: 1.05  # PPP GDP deflator to convert 2023 USD to 2025 USD (BEA GDPDEF).
 
 economic_module:
-  output_directory: results/economic
-  gdp_series: null  # Optional override CSV with columns year,gdp_trillion_usd[,population_million]
-  gdp_population_directory: data/GDP_and_Population_data
+  output_directory: results/economic  # Folder for SCC/damage CSV outputs (prefixed by results.run_directory).
+  write_damages: true  # Toggle emission-scenario damage exports; set false for SCC-only workflows.
+  gdp_series: null  # Optional GDP override CSV; leave null to use socioeconomics settings instead.
+  gdp_population_directory: data/GDP_and_Population_data  # IIASA GDP/Population directory when socioeconomics.mode == 'ssp'.
   run:
     pulse:
-      pulse_size_tco2: 1.0
+      mode: ssp_only  # SCC pulse mode (SSP-based FaIR pulses around SSP baselines; scenario-based SCC has been removed).
+      pulse_size_tco2: 1.0  # Size of the FaIR pulse (t CO₂) applied per emissions year.
   data_sources:
-    emission_root: results/emissions/All_countries
-    temperature_root: results/climate
-  reference_scenario: base_mix__base_demand
+    emission_root: results/emissions/All_countries  # Aggregated emissions root produced by calc_emissions.
+    temperature_root: results/climate  # Directory hosting temperature CSVs named <scenario>_<ssp>.csv.
+  reference_scenario: base_mix__base_demand  # Baseline scenario for SCC calculations.
   evaluation_scenarios:
     - base_mix__scen1_lower
     - base_mix__scen1_upper
-  base_year: 2025
-  damage_duration_years: 450
-  aggregation: per_year
+  base_year: 2025  # Discounting/SCC base year; must match time_horizon.start.
+  damage_duration_years: 450  # Length of SCC window when extending beyond the reporting horizon.
+  aggregation: per_year  # SCC aggregation style: 'per_year' exports SCC(τ); 'average' collapses to a scalar.
   aggregation_horizon:
-    start: 2025
-    end: 2050
-  emission_column: delta
-  emission_to_tonnes: 1000000.0
+    start: 2025  # First evaluation year when aggregation == 'average'.
+    end: 2050  # Final evaluation year when aggregation == 'average'.
+  emission_column: delta  # Column to read from emission CSVs (delta or absolute).
+  emission_to_tonnes: 1000000.0  # Multiplier applied to emission values (1e6 converts Mt → t).
   damage_function:
-    delta1: 0.0
-    delta2: 0.00236
-    # custom_terms:
-    #   - coefficient: 0.01202
-    #     exponent: 1.0
-    #   - coefficient: 0.01724
-    #     exponent: 1.5
-    use_threshold: false
-    threshold_temperature: 3.0
-    threshold_scale: 0.2
-    threshold_power: 2.0
-    use_saturation: false
-    max_fraction: 0.99
-    saturation_mode: rational
-    use_catastrophic: false
-    catastrophic_temperature: 5.0
-    disaster_fraction: 0.75
-    disaster_gamma: 1.0
-    disaster_mode: prob
-  data_sources_overview: null
+    mode: dice  # Switch between quadratic DICE baseline and custom polynomial coefficients.
+    delta1: 0.0  # Linear coefficient in the default DICE damage polynomial.
+    delta2: 0.00236  # Quadratic coefficient in the default DICE damage polynomial.
+    custom_terms:
+      - coefficient: 0.01202
+        exponent: 1.0
+      - coefficient: 0.01724
+        exponent: 1.5
+    use_threshold: false  # Enable temperature-threshold amplification beyond threshold_temperature.
+    threshold_temperature: 3.0  # Temperature where threshold amplification starts (°C).
+    threshold_scale: 0.2  # Scale factor applied during threshold amplification.
+    threshold_power: 2.0  # Power governing the curvature of the threshold amplification term.
+    use_saturation: false  # Enable saturation to smoothly cap damages at max_fraction.
+    max_fraction: 0.99  # Maximum allowable GDP damage fraction.
+    saturation_mode: rational  # 'rational' yields a smooth cap; 'clamp' clips once max_fraction is exceeded.
+    use_catastrophic: false  # Enable catastrophic add-ons when temperatures exceed catastrophic_temperature.
+    catastrophic_temperature: 5.0  # Temperature threshold for catastrophic damages (°C).
+    disaster_fraction: 0.75  # Fraction of GDP lost in catastrophic states.
+    disaster_gamma: 1.0  # Steepness parameter for probabilistic catastrophic mode.
+    disaster_mode: prob  # 'prob' adds damages probabilistically; 'step' jumps immediately at the threshold.
   methods:
-    run: ramsey_discount
+    run: ramsey_discount  # Primary discounting method to run (ramsey_discount or constant_discount).
     constant_discount:
-      discount_rate: 0.03
+      discount_rate: 0.03  # Fixed annual discount rate for constant_discount runs.
     ramsey_discount: #source: Nesje, F., Drupp, M. A., Freeman, M. C., & Groom, B. (2023). Philosophers and economists agree on climate policy paths but for different reasons. Nature Climate Change 2023 13:6, 13(6), 515–522. https://doi.org/10.1038/s41558-023-01681-w
-      rho: 0.00625 #average betweeen mean philosopher and economist view
-      eta: 1.125
+      rho: 0.00625  # Pure rate of time preference (ρ); average between philosopher/economist views.
+      eta: 1.125  # Elasticity of marginal utility of consumption (η) for Ramsey discounting.
 
 results:
   run_directory: null  # Optional top-level results/<run> directory (combined with run.output_subdir when provided).
