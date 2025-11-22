@@ -67,13 +67,15 @@ with optional extensions:
 
 ### Custom polynomial coefficients
 
-Instead of the default quadratic baseline, you can supply a list of arbitrary
-coefficients/exponents via `damage_function.custom_terms`. Each term is applied as
+Set `damage_function.mode` to `dice` (default) to use the quadratic baseline, or to
+`custom` to activate bespoke coefficients. In custom mode you supply a list of arbitrary
+coefficient/exponent pairs via `damage_function.custom_terms`. Each term is applied as
 `coefficient × T^exponent`. For example, to implement `D = 0.01202·T + 0.01724·T^{1.5}`:
 
 ```yaml
 economic_module:
   damage_function:
+    mode: custom
     custom_terms:
       - coefficient: 0.01202
         exponent: 1.0
@@ -84,8 +86,8 @@ economic_module:
 ```
 
 All other options (threshold amplification, saturation, catastrophic add-ons) work
-in combination with `custom_terms`. If `custom_terms` is omitted, the baseline reverts
-to `delta1 * T + delta2 * T^2`.
+in combination with either mode. If `custom_terms` is omitted (or mode stays `dice`),
+the baseline reverts to `delta1 * T + delta2 * T^2`.
 
 Configuration keys in `config.yaml` > `economic_module.damage_function`
 activate and tune these features.
@@ -186,6 +188,10 @@ Each climate pathway / discount method pair produces:
 
 Legacy `scc_summary.csv` / `scc_timeseries_<method>_<scenario>.csv` files have been removed. Aggregated SCC values come directly from the pulse files (they are identical to `SCCResult.scc_usd_per_tco2`).
 
+When you only need SCC outputs, set `economic_module.write_damages: false` (or run
+`scripts/run_scc.py --skip-damages`) to suppress the emission-scenario damage tables. This is
+useful when no updated emission deltas are available but you still want fresh SCC series.
+
 ### Aggregate SCC
 
 The average SCC (used when `aggregation: average`) retains the familiar ratio:
@@ -233,3 +239,5 @@ Under `economic_module` in `config.yaml`:
 
 - [GDP/Population conversion]: U.S. Bureau of Economic Analysis, Gross Domestic Product: Implicit Price Deflator (GDPDEF), retrieved via Federal Reserve Bank of St. Louis (FRED), used to convert IIASA GDP PPP-2023 to PPP USD-2025 with factor 1.05.
 - [Socioeconomics DICE method]: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1
+- [Ramsey discount paramters]: Nesje, F., Drupp, M. A., Freeman, M. C., & Groom, B. (2023). Philosophers and economists agree on climate policy paths but for different reasons. Nature Climate Change 2023 13:6, 13(6), 515–522. https://doi.org/10.1038/s41558-023-01681-w
+      rho: 0.00625 #average betweeen mean philosopher and economist view

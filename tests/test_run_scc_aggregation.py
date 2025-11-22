@@ -182,6 +182,49 @@ def test_run_scc_pulse_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     assert set(damage_df["year"].astype(int)) == set(range(2025, 2031))
 
 
+def test_run_scc_skip_damages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    config = _build_config(tmp_path, include_horizon=True)
+    monkeypatch.setattr(run_scc, "_load_config", lambda: config)
+    monkeypatch.setattr(sys, "argv", ["run_scc.py", "--skip-damages"])
+
+    run_scc.main()
+    output_dir = Path(config["economic_module"]["output_directory"])
+    pulse_scc = output_dir / "pulse_scc_timeseries_ramsey_discount_ssp245.csv"
+    damage_dir = output_dir / "base_mix"
+    assert pulse_scc.exists()
+    assert not any(damage_dir.glob("damages_*.csv"))
+
+
+def test_run_scc_custom_damage_requires_terms(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    config = _build_config(tmp_path, include_horizon=True)
+    config["economic_module"]["damage_function"] = {"mode": "custom"}
+
+    monkeypatch.setattr(run_scc, "_load_config", lambda: config)
+    monkeypatch.setattr(sys, "argv", ["run_scc.py"])
+
+    with pytest.raises(SystemExit):
+        run_scc.main()
+    assert "custom_terms" in capsys.readouterr().err.lower()
+
+
+def test_run_scc_custom_damage_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    config = _build_config(tmp_path, include_horizon=True)
+    config["economic_module"]["damage_function"] = {
+        "mode": "custom",
+        "custom_terms": [{"coefficient": 0.01, "exponent": 1.0}],
+    }
+
+    monkeypatch.setattr(run_scc, "_load_config", lambda: config)
+    monkeypatch.setattr(sys, "argv", ["run_scc.py"])
+
+    run_scc.main()
+    output_dir = Path(config["economic_module"]["output_directory"])
+    pulse_scc = output_dir / "pulse_scc_timeseries_ramsey_discount_ssp245.csv"
+    assert pulse_scc.exists()
+
+
 def test_dice_projection_can_follow_climate_scenario(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, str] = {}
 
@@ -223,3 +266,36 @@ def test_dice_projection_can_follow_climate_scenario(monkeypatch: pytest.MonkeyP
     )
     assert captured["scenario"] == "SSP3"
     assert frame.iloc[-1]["year"] == 2020
+
+
+def test_run_scc_scenario_suite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    config = _build_config(tmp_path, include_horizon=True)
+    scenario_file = tmp_path / "suite.yaml"
+    scenario_file.write_text(
+        "\n".join(
+            [
+                "default_case: {}",
+                "alt_case:",
+                "  run:",
+                "    output_subdir: alt",
+            ]
+        )
+    )
+    config["run"] = {"mode": "scenarios", "scenario_file": str(scenario_file)}
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("run: scenarios\n")
+
+    captured: list[str | None] = []
+
+    def _fake_run(cfg: dict, argv: list[str]) -> None:
+        results_cfg = cfg.get("results", {}) if isinstance(cfg, dict) else {}
+        captured.append(results_cfg.get("run_directory"))
+
+    monkeypatch.setattr(run_scc, "_run_single_configuration", _fake_run)
+    monkeypatch.setattr(run_scc, "_load_config", lambda: config)
+    monkeypatch.setattr(run_scc, "get_config_path", lambda default: config_path)
+    monkeypatch.setattr(sys, "argv", ["run_scc.py"])
+
+    run_scc.main()
+
+    assert captured == ["suite/default_case", "suite/alt"]

@@ -38,9 +38,12 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
+from copy import deepcopy
 from pathlib import Path
-from typing import Iterable, Mapping, cast
+from typing import Iterable, Mapping, MutableMapping, Sequence, cast
 
+import generate_summary
 import numpy as np
 import pandas as pd
 import yaml
@@ -51,15 +54,23 @@ from calc_emissions.scenario_io import (
     load_scenario_delta,
     split_scenario_name,
 )
+from climate_module import ScenarioSpec, run_scenarios
+from climate_module.calibration import load_fair_calibration
 from config_paths import (
     apply_results_run_directory,
     get_config_path,
     get_results_run_directory,
+    join_run_directory,
+    sanitize_run_directory,
+    set_config_root,
 )
 from economic_module import EconomicInputs, SCCAggregation, SCCResult, compute_scc
 from economic_module.socioeconomics import DiceSocioeconomics
 
 ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def _discover_emission_scenarios(emission_root: Path, baseline_case: str) -> list[str]:
@@ -150,10 +161,21 @@ def _build_damage_table(
     scenario_label: str,
     scc_result: SCCResult,
     emission_to_tonnes: float,
+    emission_frame: pd.DataFrame | None = None,
+    emission_column: str = "delta",
 ) -> pd.DataFrame:
     per_year = scc_result.per_year.copy()
     years = per_year["year"].astype(int)
-    delta_tonnes = per_year["delta_emissions_tco2"].astype(float)
+    if emission_frame is not None:
+        frame = emission_frame.copy()
+        frame["year"] = frame["year"].astype(int)
+        series = frame.set_index("year")[emission_column].astype(float)
+        aligned = series.reindex(years).fillna(0.0)
+        delta_tonnes = aligned.to_numpy(dtype=float) * float(
+            emission_to_tonnes if emission_to_tonnes not in (0, None) else 1.0
+        )
+    else:
+        delta_tonnes = per_year["delta_emissions_tco2"].astype(float)
     scc_series = per_year["scc_usd_per_tco2"].astype(float)
     discount_series = per_year.get("discount_factor")
     if discount_series is not None:
@@ -216,6 +238,44 @@ def _load_emission_frame_from_mix(
     )
 
 
+def _zero_emission_frame(source: Path | pd.DataFrame, emission_column: str) -> pd.DataFrame:
+    if isinstance(source, (str, Path)):
+        frame = pd.read_csv(source, usecols=["year"])
+        years = frame["year"].astype(int)
+    else:
+        years = pd.Series(source["year"]).astype(int)
+    result = pd.DataFrame({"year": years})
+    result[emission_column] = 0.0
+    return result
+
+
+def _align_reference_to_climate(
+    reference: str,
+    evaluation: list[str],
+    available: set[str],
+    climate_order: list[str],
+) -> tuple[str, list[str]]:
+    if reference not in available:
+        for candidate in climate_order:
+            if candidate in available:
+                reference = candidate
+                break
+        else:
+            if not available:
+                raise ValueError("No climate scenarios available to use as SCC reference.")
+            reference = sorted(available)[0]
+    filtered_eval = [
+        scenario for scenario in evaluation if scenario in available and scenario != reference
+    ]
+    if not filtered_eval:
+        filtered_eval = [
+            scenario
+            for scenario in climate_order
+            if scenario in available and scenario != reference
+        ]
+    return reference, filtered_eval
+
+
 def _max_required_year(time_cfg: Mapping[str, object], economic_cfg: Mapping[str, object]) -> int:
     start = int(time_cfg.get("start", economic_cfg.get("base_year", 2025)))
     end_candidates: list[int] = [int(time_cfg.get("end", start))]
@@ -265,7 +325,9 @@ def _load_config() -> dict:
     if not path.exists():
         return {}
     with path.open() as handle:
-        return yaml.safe_load(handle) or {}
+        config = yaml.safe_load(handle) or {}
+    set_config_root(config, path.parent)
+    return config
 
 
 def _ensure_directory(path: Path, label: str) -> Path:
@@ -274,17 +336,6 @@ def _ensure_directory(path: Path, label: str) -> Path:
     if not path.is_dir():
         raise NotADirectoryError(f"{label} path is not a directory: {path}")
     return path
-
-
-def _prompt_for_directory(label: str) -> Path:
-    while True:  # pragma: no cover - interactive fallback
-        response = input(f"Enter path to {label}: ").strip()
-        if not response:
-            continue
-        candidate = _resolve_path(response)
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-        print(f"'{candidate}' is not a valid directory. Please try again.")
 
 
 def _default_emission_root(root_cfg: dict) -> Path | None:
@@ -303,6 +354,300 @@ def _default_temperature_root(root_cfg: dict) -> Path | None:
     if not path_str:
         return None
     return _resolve_path(path_str)
+
+
+CLIMATE_OVERRIDE_KEYS = {
+    "ocean_heat_capacity",
+    "ocean_heat_transfer",
+    "deep_ocean_efficacy",
+    "forcing_4co2",
+    "equilibrium_climate_sensitivity",
+}
+
+
+def _select_climate_ids(
+    root_cfg: Mapping[str, object],
+    requested: list[str] | None = None,
+    *,
+    fallback: list[str] | None = None,
+) -> tuple[list[str], dict[str, Mapping[str, object]]]:
+    climate_cfg = root_cfg.get("climate_module", {}) or {}
+    scenarios_cfg = climate_cfg.get("climate_scenarios", {}) or {}
+    definitions = scenarios_cfg.get("definitions") or []
+    definition_map: dict[str, Mapping[str, object]] = {}
+    for entry in definitions:
+        ident = entry.get("id")
+        if ident is None:
+            continue
+        key = str(ident).strip()
+        if key:
+            definition_map[key] = entry
+    if not definition_map:
+        candidates = requested or fallback or []
+        normalized = [str(item).strip() for item in candidates if str(item).strip()]
+        return normalized, {}
+
+    if requested:
+        base_list = [str(item).strip() for item in requested if str(item).strip()]
+    else:
+        run_cfg = scenarios_cfg.get("run")
+        if isinstance(run_cfg, str):
+            base_value = run_cfg.strip()
+            if not base_value or base_value.lower() == "all":
+                base_list = list(definition_map.keys())
+            else:
+                base_list = [base_value]
+        elif isinstance(run_cfg, Iterable):
+            base_list = [str(item).strip() for item in run_cfg if str(item).strip()]
+        else:
+            base_list = list(definition_map.keys())
+    selected = [cid for cid in base_list if cid in definition_map]
+    if not selected:
+        selected = list(definition_map.keys())
+    return selected, definition_map
+
+
+def _generate_ssp_temperature_frames(
+    root_cfg: Mapping[str, object],
+    climate_ids: list[str],
+    *,
+    temperature_column: str,
+) -> dict[str, pd.DataFrame]:
+    if not climate_ids:
+        return {}
+    climate_cfg = root_cfg.get("climate_module", {}) or {}
+    scenarios_cfg = climate_cfg.get("climate_scenarios", {}) or {}
+    definitions = scenarios_cfg.get("definitions") or []
+    definition_map = {
+        str(entry.get("id")).strip(): entry for entry in definitions if entry.get("id")
+    }
+
+    time_horizon = root_cfg.get("time_horizon", {}) or {}
+    econ_cfg = root_cfg.get("economic_module", {}) or {}
+    parameters = climate_cfg.get("parameters", {}) or {}
+
+    horizon_start = float(time_horizon.get("start", parameters.get("start_year", 1750.0)))
+    horizon_end = float(time_horizon.get("end", parameters.get("end_year", horizon_start)))
+    damage_duration = econ_cfg.get("damage_duration_years")
+    if isinstance(damage_duration, (int, float)) and damage_duration > 0:
+        horizon_end = max(horizon_end, horizon_start + float(damage_duration) - 1)
+
+    base_start = float(parameters.get("start_year", horizon_start))
+    base_end = float(parameters.get("end_year", horizon_end))
+    base_timestep = float(parameters.get("timestep", 1.0))
+    base_setup = parameters.get("climate_setup", "ar6")
+    base_overrides = {key: parameters[key] for key in CLIMATE_OVERRIDE_KEYS if key in parameters}
+
+    calibration_cfg = climate_cfg.get("fair", {}).get("calibration", {})
+    calibration = load_fair_calibration(calibration_cfg, repo_root=ROOT)
+
+    specs: list[ScenarioSpec] = []
+    label_lookup: dict[str, str] = {}
+    for climate_id in climate_ids:
+        definition = definition_map.get(climate_id, {})
+        label = str(definition.get("label") or climate_id).strip() or climate_id
+        start_year = float(definition.get("start_year", base_start))
+        end_year = float(definition.get("end_year", base_end))
+        timestep = float(definition.get("timestep", base_timestep))
+        climate_setup = definition.get("climate_setup", base_setup)
+        overrides = dict(base_overrides)
+        for key in CLIMATE_OVERRIDE_KEYS:
+            if key in definition:
+                overrides[key] = definition[key]
+        compute_kwargs: dict[str, object] = {"climate_setup": climate_setup}
+        if overrides:
+            compute_kwargs["climate_overrides"] = overrides
+        if calibration is not None:
+            compute_kwargs["fair_calibration"] = calibration
+        specs.append(
+            ScenarioSpec(
+                label=label,
+                scenario=climate_id,
+                start_year=start_year,
+                end_year=end_year,
+                timestep=timestep,
+                compute_kwargs=compute_kwargs,
+            )
+        )
+        label_lookup[label] = climate_id
+
+    if not specs:
+        return {}
+    results = run_scenarios(specs)
+    frames: dict[str, pd.DataFrame] = {}
+    for spec in specs:
+        result = results[spec.label]
+        frame = pd.DataFrame(
+            {
+                "year": result.years.astype(int),
+                temperature_column: result.adjusted.astype(float),
+                "climate_scenario": spec.scenario,
+            }
+        )
+        frames[spec.scenario] = frame
+    return frames
+
+
+def _fallback_summary_dir(root_cfg: Mapping[str, object]) -> Path:
+    results_cfg = root_cfg.get("results", {}) if isinstance(root_cfg, Mapping) else {}
+    summary_cfg = results_cfg.get("summary", {}) if isinstance(results_cfg, Mapping) else {}
+    summary_path_cfg = summary_cfg.get("output_directory", "results/summary")
+    summary_path = Path(summary_path_cfg)
+    if not summary_path.is_absolute():
+        summary_path = ROOT / summary_path
+    run_dir = get_results_run_directory(root_cfg)
+    summary_path = apply_results_run_directory(summary_path, run_dir, repo_root=ROOT)
+    summary_path.mkdir(parents=True, exist_ok=True)
+    return summary_path
+
+
+def _write_scc_fallback_plots(
+    root_cfg: Mapping[str, object],
+    scc_cache: Mapping[tuple[str | None, str], SCCResult],
+    socio_cache: Mapping[str, pd.DataFrame | None],
+) -> None:
+    if not scc_cache:
+        return
+    summary_dir = _fallback_summary_dir(root_cfg)
+    plot_dir = summary_dir / "plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    import matplotlib
+
+    matplotlib.use("Agg")  # type: ignore[attr-defined]
+    import matplotlib.pyplot as plt
+
+    # Group SCC results by discount method so we can plot SSP pathways together.
+    grouped: dict[str, list[tuple[str, SCCResult]]] = {}
+    for (climate_label, method), result in scc_cache.items():
+        label = climate_label or result.scenario or "default"
+        grouped.setdefault(method, []).append((label, result))
+
+    for method, entries in grouped.items():
+        if not entries:
+            continue
+        fig, ax = plt.subplots()
+        combined: pd.DataFrame | None = None
+        for label, result in sorted(entries, key=lambda item: item[0]):
+            per_year = result.per_year
+            years = per_year["year"].astype(int)
+            values = per_year["scc_usd_per_tco2"].astype(float)
+            ax.plot(years, values, label=label)
+            column_name = f"scc_usd_per_tco2_{_safe_name(label)}"
+            series = per_year[["year", "scc_usd_per_tco2"]].rename(
+                columns={"scc_usd_per_tco2": column_name}
+            )
+            combined = (
+                series if combined is None else combined.merge(series, on="year", how="outer")
+            )
+        ax.set_title(f"SCC ({method}) – SSP comparison")
+        ax.set_xlabel("Year")
+        ax.set_ylabel("SCC (USD/tCO₂, base year)")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(plot_dir / f"scc_timeseries_{method}.png", dpi=200)
+        plt.close(fig)
+        if combined is not None:
+            combined = combined.sort_values("year").reset_index(drop=True)
+            combined.to_csv(summary_dir / f"scc_timeseries_{method}.csv", index=False)
+
+    socio_entries = [
+        (label or "default", frame)
+        for label, frame in socio_cache.items()
+        if frame is not None and not frame.empty
+    ]
+    if socio_entries:
+        socio_entries.sort(key=lambda item: item[0])
+
+    gdp_fig = gdp_ax = None
+    gdp_combined: pd.DataFrame | None = None
+    pop_fig = pop_ax = None
+    pop_combined: pd.DataFrame | None = None
+
+    for label, frame in socio_entries:
+        if "gdp_trillion_usd" in frame.columns:
+            if gdp_ax is None:
+                gdp_fig, gdp_ax = plt.subplots()
+            years = frame["year"].astype(int)
+            values = frame["gdp_trillion_usd"].astype(float)
+            gdp_ax.plot(years, values, label=label)
+            column_name = f"gdp_trillion_usd_{_safe_name(label)}"
+            series = frame[["year", "gdp_trillion_usd"]].rename(
+                columns={"gdp_trillion_usd": column_name}
+            )
+            gdp_combined = (
+                series
+                if gdp_combined is None
+                else gdp_combined.merge(series, on="year", how="outer")
+            )
+        if "population_million" in frame.columns:
+            if pop_ax is None:
+                pop_fig, pop_ax = plt.subplots()
+            years = frame["year"].astype(int)
+            values = frame["population_million"].astype(float)
+            pop_ax.plot(years, values, label=label)
+            column_name = f"population_million_{_safe_name(label)}"
+            series = frame[["year", "population_million"]].rename(
+                columns={"population_million": column_name}
+            )
+            pop_combined = (
+                series
+                if pop_combined is None
+                else pop_combined.merge(series, on="year", how="outer")
+            )
+
+    if gdp_ax is not None and gdp_fig is not None:
+        gdp_ax.set_title("Socioeconomics – GDP trajectories")
+        gdp_ax.set_xlabel("Year")
+        gdp_ax.set_ylabel("GDP (trillion USD)")
+        gdp_ax.grid(True, linestyle="--", alpha=0.4)
+        gdp_ax.legend()
+        gdp_fig.tight_layout()
+        gdp_fig.savefig(plot_dir / "socioeconomics_gdp.png", dpi=200)
+        plt.close(gdp_fig)
+        if gdp_combined is not None:
+            gdp_combined = gdp_combined.sort_values("year").reset_index(drop=True)
+            gdp_combined.to_csv(summary_dir / "socioeconomics_gdp.csv", index=False)
+
+    if pop_ax is not None and pop_fig is not None:
+        pop_ax.set_title("Socioeconomics – Population trajectories")
+        pop_ax.set_xlabel("Year")
+        pop_ax.set_ylabel("Population (million)")
+        pop_ax.grid(True, linestyle="--", alpha=0.4)
+        pop_ax.legend()
+        pop_fig.tight_layout()
+        pop_fig.savefig(plot_dir / "socioeconomics_population.png", dpi=200)
+        plt.close(pop_fig)
+        if pop_combined is not None:
+            pop_combined = pop_combined.sort_values("year").reset_index(drop=True)
+            pop_combined.to_csv(summary_dir / "socioeconomics_population.csv", index=False)
+
+    print(f"[SCC] Fallback SCC plots written to {plot_dir.relative_to(ROOT)}")
+
+
+def _run_summary_outputs(
+    root_cfg: Mapping[str, object],
+    scc_cache: Mapping[tuple[str | None, str], SCCResult],
+    socio_cache: Mapping[str, pd.DataFrame | None],
+    has_emissions: bool,
+) -> None:
+    if not scc_cache:
+        return
+    if has_emissions:
+        print("[SCC] Generating summary outputs...")
+        argv_backup = sys.argv.copy()
+        try:
+            sys.argv = ["generate_summary.py"]
+            generate_summary.main()
+            return
+        except Exception as exc:  # pragma: no cover - best-effort summary
+            print(f"[SCC] Summary generation skipped: {exc}")
+        finally:
+            sys.argv = argv_backup
+    else:
+        print("[SCC] Emission data missing; writing SCC fallback plots only.")
+    _write_scc_fallback_plots(root_cfg, scc_cache, socio_cache)
 
 
 def _parse_climate_labels(value: object) -> list[str]:
@@ -450,6 +795,9 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
     if aggregation_default not in AVAILABLE_AGGREGATIONS:
         aggregation_default = "average"
     damage_cfg = cfg.get("damage_function", {})
+    damage_mode_default = str(damage_cfg.get("mode", "dice")).strip().lower()
+    if damage_mode_default not in {"dice", "custom"}:
+        damage_mode_default = "dice"
     damage_delta1_default = float(damage_cfg.get("delta1", 0.0))
     damage_delta2_default = float(damage_cfg.get("delta2", 0.002))
     damage_use_threshold_default = bool(damage_cfg.get("use_threshold", False))
@@ -469,6 +817,8 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
     aggregation_end_default = aggregation_horizon_cfg.get("end")
 
     data_sources_cfg = cfg.get("data_sources", {}) or {}
+    write_damages_default = bool(cfg.get("write_damages", True))
+    damage_custom_terms_default = damage_cfg.get("custom_terms")
     emission_root_default = data_sources_cfg.get("emission_root")
     temperature_root_default = data_sources_cfg.get("temperature_root")
 
@@ -697,6 +1047,14 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
         damage_use_threshold=damage_use_threshold_default,
         damage_use_saturation=damage_use_saturation_default,
         damage_use_catastrophic=damage_use_catastrophic_default,
+        write_damages=write_damages_default,
+        damage_custom_terms=damage_custom_terms_default,
+    )
+    parser.add_argument(
+        "--damage-mode",
+        choices=("dice", "custom"),
+        default=damage_mode_default,
+        help="Select 'dice' for the quadratic baseline or 'custom' for coefficient/exponent lists.",
     )
     parser.add_argument(
         "--damage-use-threshold",
@@ -751,6 +1109,18 @@ def _build_parser(cfg: dict, root_cfg: dict) -> argparse.ArgumentParser:
         type=float,
         default=damage_disaster_gamma_default,
         help="Controls the steepness of the probabilistic catastrophic response.",
+    )
+    parser.add_argument(
+        "--skip-damages",
+        dest="write_damages",
+        action="store_false",
+        help="Skip emission-scenario damage CSV exports (SCC only).",
+    )
+    parser.add_argument(
+        "--write-damages",
+        dest="write_damages",
+        action="store_true",
+        help="Enable emission-scenario damage CSV exports.",
     )
     parser.add_argument(
         "--output-directory",
@@ -819,18 +1189,24 @@ def _select_targets(
     return sorted(available_set)
 
 
-def main() -> None:
-    root_cfg = _load_config()
+def _run_single_configuration(
+    root_cfg: Mapping[str, object],
+    argv: Sequence[str] | None = None,
+) -> None:
     global RUN_DIRECTORY
     RUN_DIRECTORY = get_results_run_directory(root_cfg)
     config = root_cfg.get("economic_module", {})
+    run_cfg = config.get("run", {}) or {}
+    pulse_cfg = run_cfg.get("pulse", {}) or {}
+    # Scenario-based SCC calculations have been removed; always use SSP-based pulses.
+    ssp_only_mode = True
     countries_cfg = root_cfg.get("calc_emissions", {}).get("countries", {}) or {}
     baseline_case = (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
 
     parser = _build_parser(config, root_cfg)
-    args = parser.parse_args()
+    args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.list_methods:
         msg_lines = [
@@ -901,9 +1277,10 @@ def main() -> None:
             default_emission_root = _default_emission_root(root_cfg)
             if default_emission_root and default_emission_root.exists():
                 emission_root_path = default_emission_root
-        if emission_root_path is None:
-            emission_root_path = _prompt_for_directory("emission delta root")  # pragma: no cover
-        emission_root_path = _ensure_directory(emission_root_path, "emission delta root")
+        if emission_root_path is not None:
+            emission_root_path = _ensure_directory(emission_root_path, "emission delta root")
+        else:
+            print("[SCC] No emission delta outputs detected; proceeding without emission damages.")
 
         reference_default = str(
             args.reference_scenario or config.get("reference_scenario") or f"{BASE_DEMAND_CASE}"
@@ -912,28 +1289,20 @@ def main() -> None:
         if isinstance(evaluation_cfg, str):
             evaluation_cfg = [evaluation_cfg]
         evaluation_cfg = [entry for entry in evaluation_cfg if str(entry).strip()]
+        scenario_candidates = [
+            reference_default,
+            *[s for s in evaluation_cfg if s != reference_default],
+        ]
 
-        climate_inputs = _parse_climate_labels(args.climate_scenario)
-        if not climate_inputs:
-            climate_inputs = _parse_climate_labels(data_sources_cfg.get("climate_scenarios"))
-        if not climate_inputs:
+        fallback_climate_cfg = _parse_climate_labels(data_sources_cfg.get("climate_scenarios"))
+        if not fallback_climate_cfg:
             single_climate = data_sources_cfg.get("climate_scenario")
             if single_climate:
-                climate_inputs = [str(single_climate).strip()]
-        if not climate_inputs:
-            climate_inputs = _climate_labels_from_module(root_cfg)
-        if not climate_inputs:
-            climate_defs = (
-                root_cfg.get("climate_module", {})
-                .get("climate_scenarios", {})
-                .get("definitions", [])
-            )
-            if climate_defs:
-                first_def = climate_defs[0]
-                fallback = first_def.get("label") or first_def.get("id")
-                if fallback:
-                    climate_inputs = [str(fallback).strip()]
-        climate_inputs = [label for label in climate_inputs if label]
+                fallback_climate_cfg = [str(single_climate).strip()]
+        requested_climates = _parse_climate_labels(args.climate_scenario)
+        climate_inputs, climate_definition_map = _select_climate_ids(
+            root_cfg, requested_climates, fallback=fallback_climate_cfg
+        )
         if not climate_inputs:
             parser.error("Unable to determine climate scenario labels.")
 
@@ -947,61 +1316,153 @@ def main() -> None:
             default_temperature_root = _default_temperature_root(root_cfg)
             if default_temperature_root and default_temperature_root.exists():
                 temperature_root_path = default_temperature_root
-        if temperature_root_path is None:
-            temperature_root_path = _prompt_for_directory(
-                "temperature results directory"
-            )  # pragma: no cover
-        temperature_root_path = _ensure_directory(temperature_root_path, "temperature root")
+        if temperature_root_path is not None:
+            temperature_root_path = _ensure_directory(temperature_root_path, "temperature root")
 
-        available_scenarios: set[str] = set()
-        scenario_temperature: dict[tuple[str, str], Path] = {}
+        scenario_temperature: dict[tuple[str, str], Path | pd.DataFrame] = {}
+        scenario_climate: dict[str, str] = {}
         emission_cache: dict[str, pd.DataFrame] = {}
+        available_scenarios: set[str] = set()
         damage_entries: list[dict[str, str]] = []
+        climate_only_mode = False
+        climate_jobs: list[dict[str, str]] = []
 
-        for mix_dir in sorted(p for p in emission_root_path.iterdir() if p.is_dir()):
-            co2_path = mix_dir / "co2.csv"
-            if not co2_path.exists():
-                continue
-            try:
-                df = pd.read_csv(co2_path, comment="#")
-            except Exception:
-                continue
-            demand_cases: list[str] = []
-            for col in df.columns:
-                if col.startswith("delta_") or col.startswith("absolute_"):
-                    demand_cases.append(col.split("_", 1)[1])
-            demand_cases = sorted(set(demand_cases))
-            if not demand_cases:
-                continue
-            mix_scenarios = {f"{mix_dir.name}__{case}" for case in demand_cases}
-            for case in demand_cases:
-                scenario_name = f"{mix_dir.name}__{case}"
-                available_scenarios.add(scenario_name)
-                if scenario_name not in emission_cache:
-                    try:
-                        emission_cache[scenario_name] = _load_emission_frame_from_mix(
-                            emission_root_path,
-                            scenario_name,
-                            args.emission_column,
-                            baseline_case,
-                        )
-                    except (FileNotFoundError, KeyError, ValueError):
-                        continue
+        def _add_temperature_entry(scenario_name: str) -> bool:
+            if temperature_root_path is None:
+                return False
+            added = False
             for climate_label in climate_inputs:
-                for scenario_name in sorted(mix_scenarios):
-                    temp_file = temperature_root_path / f"{scenario_name}_{climate_label}.csv"
-                    if not temp_file.exists():
+                temp_file = temperature_root_path / f"{scenario_name}_{climate_label}.csv"
+                if not temp_file.exists():
+                    continue
+                scenario_temperature[(scenario_name, climate_label)] = temp_file
+                scenario_climate.setdefault(scenario_name, climate_label)
+                available_scenarios.add(scenario_name)
+                added = True
+            return added
+
+        if emission_root_path is not None:
+            for mix_dir in sorted(p for p in emission_root_path.iterdir() if p.is_dir()):
+                co2_path = mix_dir / "co2.csv"
+                if not co2_path.exists():
+                    continue
+                try:
+                    df = pd.read_csv(co2_path, comment="#")
+                except Exception:
+                    continue
+                demand_cases: list[str] = []
+                for col in df.columns:
+                    if col.startswith("delta_") or col.startswith("absolute_"):
+                        demand_cases.append(col.split("_", 1)[1])
+                demand_cases = sorted(set(demand_cases))
+                if not demand_cases:
+                    continue
+                for case in demand_cases:
+                    scenario_name = f"{mix_dir.name}__{case}"
+                    if scenario_name not in emission_cache:
+                        try:
+                            emission_cache[scenario_name] = _load_emission_frame_from_mix(
+                                emission_root_path,
+                                scenario_name,
+                                args.emission_column,
+                                baseline_case,
+                            )
+                        except (FileNotFoundError, KeyError, ValueError):
+                            continue
+                    if not _add_temperature_entry(scenario_name):
                         continue
-                    scenario_temperature[(scenario_name, climate_label)] = temp_file
                     _, demand_case = split_scenario_name(scenario_name)
                     if demand_case != baseline_case:
-                        damage_entries.append(
-                            {
-                                "scenario": scenario_name,
-                                "mix": mix_dir.name,
-                                "climate": climate_label,
-                            }
-                        )
+                        for climate_label in climate_inputs:
+                            if (scenario_name, climate_label) in scenario_temperature:
+                                damage_entries.append(
+                                    {
+                                        "scenario": scenario_name,
+                                        "mix": mix_dir.name,
+                                        "climate": climate_label,
+                                    }
+                                )
+
+        if emission_root_path is None and not climate_only_mode:
+            for scenario_name in scenario_candidates:
+                if not _add_temperature_entry(scenario_name):
+                    continue
+                if scenario_name not in emission_cache:
+                    example_entry = None
+                    for label in climate_inputs:
+                        tuple_key = (scenario_name, label)
+                        if tuple_key in scenario_temperature:
+                            example_entry = scenario_temperature[tuple_key]
+                            break
+                    if example_entry is None:
+                        continue
+                    emission_cache[scenario_name] = _zero_emission_frame(
+                        example_entry, args.emission_column
+                    )
+        if (
+            ssp_only_mode
+            or not scenario_temperature
+            or reference_default not in available_scenarios
+        ):
+            climate_only_mode = True
+            frames = _generate_ssp_temperature_frames(
+                root_cfg,
+                climate_inputs,
+                temperature_column=args.temperature_column,
+            )
+            if not frames:
+                parser.error(
+                    "Unable to construct SSP temperature scenarios based on"
+                    "climate_module settings."
+                )
+            scenario_temperature.clear()
+            scenario_climate.clear()
+            available_scenarios.clear()
+            for climate_label, frame in frames.items():
+                label = str(frame["climate_scenario"].iloc[0])
+                climate_label = label or climate_label
+                ref_name = f"{climate_label}__baseline"
+                driver_name = f"{climate_label}__pulse"
+                for scenario_name in (ref_name, driver_name):
+                    scenario_temperature[(scenario_name, climate_label)] = frame
+                    scenario_climate[scenario_name] = climate_label
+                    emission_cache[scenario_name] = _zero_emission_frame(
+                        frame, args.emission_column
+                    )
+                    available_scenarios.add(scenario_name)
+                climate_jobs.append(
+                    {
+                        "climate": climate_label,
+                        "reference": ref_name,
+                        "driver": driver_name,
+                    }
+                )
+            if climate_jobs:
+                reference_default = climate_jobs[0]["reference"]
+                evaluation_cfg = [job["driver"] for job in climate_jobs]
+                climate_inputs = [job["climate"] for job in climate_jobs]
+            else:
+                reference_default, evaluation_cfg = _align_reference_to_climate(
+                    reference_default,
+                    evaluation_cfg,
+                    available_scenarios,
+                    climate_inputs,
+                )
+
+        scenario_candidates = [
+            reference_default,
+            *[s for s in evaluation_cfg if s != reference_default],
+        ]
+
+        if reference_default not in available_scenarios:
+            location = (
+                temperature_root_path if temperature_root_path is not None else "generated SSP runs"
+            )
+            parser.error(
+                f"Reference scenario '{reference_default}' missing temperature data ({location})."
+            )
+        if not scenario_temperature:
+            parser.error("No temperature scenario files available for SCC calculation.")
     output_dir = _resolve_path(args.output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1010,10 +1471,11 @@ def main() -> None:
     agg_end = args.aggregation_end
 
     run_cfg = config.get("run", {}) or {}
-    pulse_cfg = run_cfg.get("pulse", {}) or {}
+    pulse_cfg = pulse_cfg or run_cfg.get("pulse", {}) or {}
     damage_kwargs = {
         "delta1": args.damage_delta1,
         "delta2": args.damage_delta2,
+        "custom_terms": None,
         "use_threshold": args.damage_use_threshold,
         "threshold_temperature": args.damage_threshold_temperature,
         "threshold_scale": args.damage_threshold_scale,
@@ -1027,14 +1489,32 @@ def main() -> None:
         "disaster_gamma": args.damage_disaster_gamma,
         "disaster_mode": args.damage_disaster_mode,
     }
+    pulse_size_default = 1.0
     if pulse_cfg:
-        damage_kwargs["_pulse_size_tco2__"] = float(pulse_cfg.get("pulse_size_tco2", 1.0e6))
+        pulse_size_default = float(pulse_cfg.get("pulse_size_tco2", 1.0e6))
+        damage_kwargs["_pulse_size_tco2__"] = pulse_size_default
+    if args.damage_mode == "custom":
+        custom_terms = args.damage_custom_terms
+        if not custom_terms:
+            parser.error(
+                "damage_function.mode='custom' requires damage_function.custom_terms "
+                "with coefficient/exponent entries."
+            )
+        if not isinstance(custom_terms, Sequence):
+            parser.error("damage_function.custom_terms must be a list of mappings.")
+        damage_kwargs["custom_terms"] = custom_terms
+    else:
+        damage_kwargs.pop("custom_terms", None)
     scc_cache: dict[tuple[str, str], SCCResult] = {}
 
-    if not damage_entries:
-        parser.error("No demand scenarios available for SCC damage calculations.")
+    add_tco2_override = args.add_tco2
+    if add_tco2_override is None and emission_root_path is None:
+        add_tco2_override = pulse_size_default
+
     if reference_default not in available_scenarios:
-        parser.error(f"Reference scenario '{reference_default}' not found in emission outputs.")
+        parser.error(
+            f"Reference scenario '{reference_default}' not found in available temperature files."
+        )
 
     driver_candidates = [
         scenario
@@ -1044,26 +1524,33 @@ def main() -> None:
     driver_scenario = driver_candidates[0] if driver_candidates else None
     if driver_scenario is None:
         fallback = [s for s in sorted(available_scenarios) if s != reference_default]
-        if fallback:
-            driver_scenario = fallback[0]
-    if driver_scenario is None:
-        parser.error("Need at least one non-reference scenario to drive SCC computation.")
+        driver_scenario = fallback[0] if fallback else reference_default
 
-    for climate_label in climate_inputs:
-        reference_label = f"{reference_default}_{climate_label}"
-        driver_label = f"{driver_scenario}_{climate_label}"
-        temp_reference = scenario_temperature.get((reference_default, climate_label))
-        temp_driver = scenario_temperature.get((driver_scenario, climate_label))
+    def _temperature_lookup(scenario_name: str, climate_label: str) -> Path | pd.DataFrame | None:
+        entry = scenario_temperature.get((scenario_name, climate_label))
+        if entry is not None:
+            return entry
+        default = scenario_climate.get(scenario_name)
+        if default is not None:
+            return scenario_temperature.get((scenario_name, default))
+        return None
+
+    def _run_job(climate_label: str, reference_scenario: str, driver_scenario: str) -> bool:
+        temp_reference = _temperature_lookup(reference_scenario, climate_label)
+        temp_driver = _temperature_lookup(driver_scenario, climate_label)
         if temp_reference is None or temp_driver is None:
             print(
                 f"[SCC] Skipping climate={climate_label} "
-                f"(missing temperature data for {reference_default} or {driver_scenario})."
+                f"(missing temperature data for {reference_scenario} or {driver_scenario})."
             )
-            continue
-        emission_reference = emission_cache.get(reference_default)
+            return False
+        emission_reference = emission_cache.get(reference_scenario)
         emission_driver = emission_cache.get(driver_scenario)
         if emission_reference is None or emission_driver is None:
             parser.error("Emission data missing for reference or driver scenario.")
+
+        reference_label = f"{reference_scenario}_{climate_label}"
+        driver_label = f"{driver_scenario}_{climate_label}"
 
         temp_map = {
             reference_label: temp_reference,
@@ -1169,7 +1656,7 @@ def main() -> None:
                 "reference": reference_label,
                 "base_year": args.base_year,
                 "aggregation": aggregation,
-                "add_tco2": args.add_tco2,
+                "add_tco2": add_tco2_override,
                 "damage_kwargs": dict(damage_kwargs),
             }
             if discount_method == "constant_discount":
@@ -1186,37 +1673,150 @@ def main() -> None:
                 **run_kwargs,
             )
 
-            scc_cache[(climate_label, discount_method)] = result
-            _write_scc_outputs(result, discount_method, climate_label, output_dir)
+            cache_key = climate_label or driver_scenario
+            scc_cache[(cache_key, discount_method)] = result
+            _write_scc_outputs(result, discount_method, cache_key, output_dir)
 
             print(
-                f"[SCC pulse:{discount_method}] SSP={climate_label} driver={driver_scenario} "
-                f"vs {reference_default} (base year {result.base_year})"
+                f"[SCC pulse:{discount_method}] SSP={cache_key} driver={driver_scenario} "
+                f"vs {reference_scenario} (base year {result.base_year})"
             )
+        return True
+
+    if climate_jobs:
+        ran_any = False
+        for job in climate_jobs:
+            ran_any = _run_job(job["climate"], job["reference"], job["driver"]) or ran_any
+        if not ran_any:
+            parser.error("No SCC results generated; check climate scenario availability.")
+    else:
+        ran_any = False
+        for climate_label in climate_inputs:
+            ran_any = _run_job(climate_label, reference_default, driver_scenario) or ran_any
+        if not ran_any:
+            parser.error("No SCC results generated; check climate scenario availability.")
+
+    _run_summary_outputs(
+        root_cfg, scc_cache, socio_cache, has_emissions=emission_root_path is not None
+    )
 
     if not scc_cache:
         parser.error("No SCC results generated; check climate scenario availability.")
 
-    for entry in damage_entries:
-        climate_label = entry["climate"]
-        scenario_name = entry["scenario"]
-        mix_case = entry["mix"]
-        scenario_label = f"{scenario_name}_{climate_label}"
-        mix_dir = output_dir / mix_case
-        mix_dir.mkdir(parents=True, exist_ok=True)
-        for discount_method in discount_methods:
-            scc_result = scc_cache.get((climate_label, discount_method))
-            if scc_result is None:
-                continue
-            damage_df = _build_damage_table(
-                scenario_label,
-                scc_result,
-                args.emission_unit_multiplier,
-            )
-            damage_df["climate_scenario"] = climate_label
-            damage_df["method"] = discount_method
-            damage_path = mix_dir / f"damages_{discount_method}_{scenario_label}.csv"
-            damage_df.to_csv(damage_path, index=False)
+    if args.write_damages and emission_root_path is not None:
+        for entry in damage_entries:
+            climate_label = entry["climate"]
+            scenario_name = entry["scenario"]
+            mix_case = entry["mix"]
+            scenario_label = f"{scenario_name}_{climate_label}"
+            mix_dir = output_dir / mix_case
+            mix_dir.mkdir(parents=True, exist_ok=True)
+            for discount_method in discount_methods:
+                scc_result = scc_cache.get((climate_label, discount_method))
+                if scc_result is None:
+                    continue
+                emission_frame = emission_cache.get(scenario_name)
+                damage_df = _build_damage_table(
+                    scenario_label,
+                    scc_result,
+                    args.emission_unit_multiplier,
+                    emission_frame=emission_frame,
+                    emission_column=args.emission_column,
+                )
+                damage_df["climate_scenario"] = climate_label
+                damage_df["method"] = discount_method
+                damage_path = mix_dir / f"damages_{discount_method}_{scenario_label}.csv"
+                damage_df.to_csv(damage_path, index=False)
+    elif damage_entries:
+        print("[SCC] Skipping damage exports (--skip-damages).")
+
+
+def _deep_merge(target: MutableMapping[str, object], overrides: Mapping[str, object]) -> None:
+    for key, value in overrides.items():
+        if isinstance(value, Mapping) and isinstance(target.get(key), MutableMapping):
+            _deep_merge(target[key], value)  # type: ignore[index]
+        else:
+            target[key] = deepcopy(value)
+
+
+def _resolve_suite_directory(
+    base_config: Mapping[str, object],
+    run_cfg: Mapping[str, object],
+    suite_name: str,
+) -> str | None:
+    base_run_dir = get_results_run_directory(base_config, include_run_subdir=False)
+    suite_base = sanitize_run_directory(run_cfg.get("output_subdir"))
+    return join_run_directory(base_run_dir, suite_base, suite_name)
+
+
+def _run_scenario_suite(
+    base_config: Mapping[str, object],
+    config_path: Path,
+    argv: Sequence[str],
+) -> None:
+    run_cfg = base_config.get("run", {}) or {}
+    scenario_file = run_cfg.get("scenario_file")
+    if not scenario_file:
+        raise ValueError("run.scenario_file must be provided when run.mode == 'scenarios'.")
+    scenario_path = Path(scenario_file)
+    if not scenario_path.is_absolute():
+        scenario_path = (config_path.parent / scenario_path).resolve()
+    if not scenario_path.exists():
+        raise FileNotFoundError(f"Scenario file not found: {scenario_path}")
+
+    with scenario_path.open() as handle:
+        scenario_overrides = yaml.safe_load(handle) or {}
+    if not isinstance(scenario_overrides, Mapping):
+        raise ValueError("Scenario file must define a mapping of scenario names to overrides.")
+
+    suite_name = sanitize_run_directory(scenario_path.stem) or "scenarios"
+    suite_run_dir = _resolve_suite_directory(base_config, run_cfg, suite_name)
+    base_root = config_path.parent
+
+    for scenario_name, overrides in scenario_overrides.items():
+        overrides = overrides or {}
+        if not isinstance(overrides, Mapping):
+            raise ValueError(f"Scenario '{scenario_name}' overrides must be a mapping.")
+        config_copy = deepcopy(base_config)
+        _deep_merge(config_copy, overrides)
+        config_copy.setdefault("run", {})["mode"] = "normal"
+        scenario_run_cfg = (
+            overrides.get("run", {}) if isinstance(overrides.get("run"), Mapping) else {}
+        )
+        scenario_output = scenario_run_cfg.get("output_subdir") or scenario_name
+        final_run_dir = join_run_directory(suite_run_dir, scenario_output)
+        config_copy.setdefault("run", {})["output_subdir"] = scenario_output
+        results_cfg = config_copy.setdefault("results", {})
+        if isinstance(results_cfg, MutableMapping):
+            if final_run_dir:
+                results_cfg["run_directory"] = final_run_dir
+            else:
+                results_cfg.pop("run_directory", None)
+        set_config_root(config_copy, base_root)
+        if final_run_dir:
+            print(f"[SCC] Scenario '{scenario_name}' → results/{final_run_dir}")
+        else:
+            print(f"[SCC] Scenario '{scenario_name}' → default results directory")
+        _run_single_configuration(config_copy, argv)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    cli_args = list(argv) if argv is not None else sys.argv[1:]
+    config_path = get_config_path(ROOT / "config.yaml")
+    root_cfg = _load_config()
+    set_config_root(root_cfg, config_path.parent)
+
+    run_cfg = root_cfg.get("run", {}) or {}
+    run_mode = str(run_cfg.get("mode", "normal")).strip().lower()
+
+    if "--list-methods" in cli_args:
+        _run_single_configuration(root_cfg, cli_args)
+        return
+
+    if run_mode == "scenarios":
+        _run_scenario_suite(root_cfg, config_path, cli_args)
+    else:
+        _run_single_configuration(root_cfg, cli_args)
 
 
 if __name__ == "__main__":
