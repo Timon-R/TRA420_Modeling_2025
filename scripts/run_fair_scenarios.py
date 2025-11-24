@@ -120,9 +120,7 @@ RESOURCE_DIR.mkdir(parents=True, exist_ok=True)
 EMISSION_DIR = ROOT / CONFIG.get("emission_timeseries_directory", "resources")
 EMISSION_DIR.mkdir(parents=True, exist_ok=True)
 EMISSION_MAP = {
-    d.name: d
-    for d in sorted(EMISSION_DIR.iterdir())
-    if d.is_dir() and (d / "co2.csv").exists()
+    d.name: d for d in sorted(EMISSION_DIR.iterdir()) if d.is_dir() and (d / "co2.csv").exists()
 }
 EMISSION_CFG = CONFIG.get("emission_scenarios", {})
 emission_run = EMISSION_CFG.get("run", "all") if isinstance(EMISSION_CFG, dict) else "all"
@@ -157,7 +155,9 @@ def build_scenarios() -> list[ScenarioSpec]:
         emission_dir = EMISSION_MAP[emission_name]
         default_co2 = emission_dir / "co2.csv"
         if not default_co2.exists():
-            raise FileNotFoundError(f"Missing co2.csv for emission scenario '{emission_name}' in {emission_dir}")
+            raise FileNotFoundError(
+                f"Missing co2.csv for emission scenario '{emission_name}' in {emission_dir}"
+            )
 
         for climate_id in SELECTED_CLIMATE_IDS:
             definition = CLIMATE_DEFS[climate_id]

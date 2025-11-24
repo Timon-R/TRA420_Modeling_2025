@@ -148,6 +148,7 @@ climate_module:
 pattern_scaling:
   output_directory: results/climate_scaled
   scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv
+  scaling_factors_file_precipitation: data/pattern_scaling_precipitation_by_country_mean.csv
   # Columns: name, iso3, continent, scenario, patterns.* where * indicates how the pattern scaling is weighted
   scaling_weighting: area  # Options: gdp.2000, gdp.2100, pop.2000, pop.2100, area (default)
   countries: # List of ISO3 codes
