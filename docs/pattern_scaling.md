@@ -82,4 +82,4 @@ The script loads `config.yaml`, computes scaling factors based on the selected
 weighting and countries, and writes scaled CSVs to `pattern_scaling.output_directory`.
 
 ## References
-- [CMIP6 pattern scaling factors]:
+US EPA. Pattern Scaling of Global Climate Variables. 2023. (https://www.github.com/USEPA/pattern-scaled-climate-variables)
