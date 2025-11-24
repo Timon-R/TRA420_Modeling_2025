@@ -52,6 +52,8 @@ Each output file is named `<ISO3>_<original_filename>.csv` and stores:
 - `year`
 - `temperature_baseline` (scaled)
 - `temperature_adjusted` (scaled)
+- `precipitation_baseline` (scaled)
+- `precipitation_adjusted` (scaled)
 - `temperature_delta` (scaled difference)
 - `climate_scenario`
 - `iso3` (country code)

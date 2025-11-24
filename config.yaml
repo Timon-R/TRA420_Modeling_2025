@@ -145,7 +145,6 @@ pattern_scaling:
     - KOS # Kosovo, unofficially assigned ISO3 code
     - SRB
     - MNE
-    -
 economic_module:
   output_directory: results/economic  # Folder for SCC/damage CSV outputs (prefixed by results.run_directory).
   write_damages: true  # Toggle emission-scenario damage exports; set false for SCC-only workflows.
