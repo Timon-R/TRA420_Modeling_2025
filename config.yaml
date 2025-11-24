@@ -83,18 +83,6 @@ climate_module:
   emission_scenarios:
     run: all  # Load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
 
-pattern_scaling:
-  output_directory: results/climate_scaled
-  scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv  # Columns: name, iso3, continent, scenario, patterns.* (weighting basis)
-  scaling_weighting: area  # Options: gdp.2000, gdp.2100, pop.2000, pop.2100, area (default)
-  countries:
-    - ALB
-    - BIH
-    - MKD
-    - KOS # Kosovo, unofficially assigned ISO3 code
-    - SRB
-    - MNE
-
 air_pollution:
   output_directory: results/air_pollution
   concentration_measure: median  # Default concentration statistic to use when available.
@@ -157,6 +145,7 @@ pattern_scaling:
     - KOS # Kosovo, unofficially assigned ISO3 code
     - SRB
     - MNE
+    -
 economic_module:
   output_directory: results/economic  # Folder for SCC/damage CSV outputs (prefixed by results.run_directory).
   write_damages: true  # Toggle emission-scenario damage exports; set false for SCC-only workflows.
