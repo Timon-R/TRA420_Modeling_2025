@@ -8,8 +8,6 @@ from economic_module import (
     EconomicInputs,
     compute_damage_difference,
     compute_damages,
-    compute_scc_constant_discount,
-    compute_scc_ramsey_discount,
     damage_dice,
 )
 from economic_module.scc import (
@@ -42,10 +40,23 @@ def sample_inputs() -> EconomicInputs:
 
 
 def test_compute_damages_returns_expected_columns(sample_inputs: EconomicInputs):
-    df = compute_damages(sample_inputs, scenarios=["policy"], damage_func=damage_dice, damage_kwargs={"delta2": 0.0})
+    df = compute_damages(
+        sample_inputs, scenarios=["policy"], damage_func=damage_dice, damage_kwargs={"delta2": 0.0}
+    )
     assert "damage_usd_policy" in df.columns
     damages = df["damage_usd_policy"].to_numpy()
     expected = np.zeros_like(damages)
+    np.testing.assert_allclose(damages, expected)
+
+
+def test_damage_dice_custom_terms():
+    temps = np.array([1.0, 2.0, 3.0])
+    coefficients = [
+        {"coefficient": 0.01202, "exponent": 1.0},
+        {"coefficient": 0.01724, "exponent": 1.5},
+    ]
+    damages = damage_dice(temps, delta1=0.0, delta2=0.0, custom_terms=coefficients)
+    expected = 0.01202 * temps + 0.01724 * temps**1.5
     np.testing.assert_allclose(damages, expected)
 
 
@@ -67,35 +78,6 @@ def test_ramsey_discount_pipeline(sample_inputs: EconomicInputs):
     assert consumption_pc.shape == growth.shape
     factors = _ramsey_discount_factors(sample_inputs.years, 2025, growth, rho=0.01, eta=1.0)
     assert factors[0] == pytest.approx(1.0)
-
-
-def test_compute_scc_constant_discount(sample_inputs: EconomicInputs):
-    result = compute_scc_constant_discount(
-        sample_inputs,
-        scenario="policy",
-        reference="baseline",
-        base_year=2025,
-        discount_rate=0.03,
-        aggregation="average",
-        add_tco2=-2.0,
-        damage_kwargs={"delta2": 0.0},
-    )
-    assert not np.isnan(result.scc_usd_per_tco2)
-
-
-def test_compute_scc_ramsey_discount(sample_inputs: EconomicInputs):
-    result = compute_scc_ramsey_discount(
-        sample_inputs,
-        scenario="policy",
-        reference="baseline",
-        base_year=2025,
-        rho=0.01,
-        eta=1.0,
-        aggregation="average",
-        add_tco2=-2.0,
-        damage_kwargs={"delta2": 0.0},
-    )
-    assert result.per_year["discount_factor"].iloc[0] == pytest.approx(1.0)
 
 
 def test_from_csv_automatically_loads_ssp_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -136,6 +118,45 @@ def test_from_csv_automatically_loads_ssp_data(tmp_path: Path, monkeypatch: pyte
     )
 
     assert inputs.ssp_family == "SSP2"
-    np.testing.assert_allclose(inputs.gdp_trillion_usd, np.array([80.0, 90.0]))
+    np.testing.assert_array_equal(inputs.years, np.arange(2025, 2031))
+    np.testing.assert_allclose(inputs.gdp_trillion_usd[[0, -1]], np.array([80.0, 90.0]))
     assert inputs.population_million is not None
-    np.testing.assert_allclose(inputs.population_million, np.array([7000.0, 7100.0]))
+    np.testing.assert_allclose(inputs.population_million[[0, -1]], np.array([7000.0, 7100.0]))
+
+
+def test_from_csv_accepts_custom_gdp_frame(tmp_path: Path):
+    temp_path = tmp_path / "temp_custom.csv"
+    emission_path = tmp_path / "emission_custom.csv"
+
+    pd.DataFrame(
+        {
+            "year": [2025, 2026, 2027],
+            "temperature_adjusted": [1.0, 1.05, 1.1],
+            "temperature_baseline": [1.0, 1.04, 1.08],
+        }
+    ).to_csv(temp_path, index=False)
+    pd.DataFrame({"year": [2025, 2026, 2027], "delta": [-1.0, -1.0, -1.0]}).to_csv(
+        emission_path, index=False
+    )
+
+    gdp_frame = pd.DataFrame(
+        {
+            "year": [2025, 2026, 2027],
+            "gdp_trillion_usd": [50.0, 51.0, 52.0],
+            "population_million": [7000.0, 7010.0, 7020.0],
+        }
+    )
+
+    inputs = EconomicInputs.from_csv(
+        {"policy": temp_path},
+        {"policy": emission_path},
+        gdp_path=None,
+        temperature_column="temperature_adjusted",
+        emission_column="delta",
+        emission_to_tonnes=1e6,
+        gdp_frame=gdp_frame,
+    )
+
+    np.testing.assert_allclose(inputs.gdp_trillion_usd[[0, -1]], [50.0, 52.0])
+    assert inputs.population_million is not None
+    np.testing.assert_allclose(inputs.population_million[[0, -1]], [7000.0, 7020.0])

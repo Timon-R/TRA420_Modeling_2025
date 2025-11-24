@@ -84,9 +84,11 @@ def _build_timepoints(cfg: Mapping[str, float]) -> np.ndarray:
     timestep = float(cfg["timestep"])
     if timestep <= 0:
         raise ValueError("timestep must be positive.")
-    steps = int(round((end_year - start_year) / timestep)) + 1
+    steps = int(round((end_year - start_year) / timestep))
+    if steps <= 0:
+        raise ValueError("Time configuration results in zero steps; check start/end years.")
     start = start_year + timestep / 2
-    end = end_year + timestep / 2
+    end = end_year - timestep / 2
     return np.linspace(start, end, steps)
 
 

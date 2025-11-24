@@ -1,149 +1,148 @@
+run:
+  mode: scenarios  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  output_subdir: test  # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
+  scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
+
+time_horizon:
+  start: 2025
+  end: 2100
+  step: 1  # Emission reporting grid; FaIR extends beyond this when damage_duration_years demands longer horizons.
+
 calc_emissions:
-  emission_factors_file: data/emission_factors.csv  # Columns: co2_mt_per_twh, so2_kt_per_twh, nox_kt_per_twh, pm25_kt_per_twh
-  output_directory: resources
-  results_directory: results/emissions  # Mirror CSVs for reporting/archival use.
-  years:
-    start: 2025
-    end: 2100
-    step: 5
-  demand_scenarios:
-    oecd_low:
-      description: OECD low demand case (TWh).
-      values:
-        2025: 900
-        2030: 915
-        2040: 940
-        2050: 965
-        2060: 985
-        2070: 1000
-        2080: 1015
-        2090: 1030
-        2100: 1045
-    oecd_baseline:
-      description: OECD baseline demand case (TWh).
-      values:
-        2025: 950
-        2030: 980
-        2040: 1020
-        2050: 1060
-        2060: 1100
-        2070: 1130
-        2080: 1160
-        2090: 1185
-        2100: 1210
-    oecd_high:
-      description: OECD high demand case (TWh).
-      values:
-        2025: 1000
-        2030: 1050
-        2040: 1110
-        2050: 1180
-        2060: 1240
-        2070: 1300
-        2080: 1360
-        2090: 1410
-        2100: 1460
-  mix_scenarios:
-    reference:
-      description: Balanced mix with gradual decarbonisation.
-      shares:
-        coal: 0.25
-        gas: 0.30
-        nuclear: 0.12
-        hydro: 0.10
-        wind: 0.10
-        solar: 0.08
-        biomass: 0.05
-    renewables_push:
-      description: Accelerated deployment of wind and solar.
-      shares:
-        coal: 0.10
-        gas: 0.18
-        nuclear: 0.12
-        hydro: 0.12
-        wind: 0.22
-        solar: 0.20
-        biomass: 0.06
-    fossil_lockin:
-      description: Slower transition away from fossil generation.
-      shares:
-        coal: 0.40
-        gas: 0.35
-        nuclear: 0.07
-        hydro: 0.08
-        wind: 0.05
-        solar: 0.03
-        biomass: 0.02
-  baseline:
-    demand_scenario: oecd_baseline
-    mix_scenario: reference
-  scenarios:
-    - name: energy_mix_A
-      demand_scenario: oecd_high
-      mix_scenario: renewables_push
-    - name: energy_mix_B
-      demand_scenario: oecd_low
-      mix_scenario: fossil_lockin
-    - name: custom_example
-      demand_custom:
-        2025: 960
-        2030: 990
-        2040: 1050
-        2050: 1100
-        2060: 1140
-        2070: 1180
-        2080: 1210
-        2090: 1240
-        2100: 1270
-      mix_custom:
-        shares:
-          coal: 0.15
-          gas: 0.25
-          nuclear: 0.15
-          hydro: 0.12
-          wind: 0.15
-          solar: 0.12
-          biomass: 0.06
+  countries:
+    directory: data/calc_emissions/configs
+    pattern: config_{name}.yaml
+    aggregate_output_directory: results/emissions/All_countries
+    aggregate_results_directory:
+    resources_root: results/emissions
+    demand_scenarios:
+      - base_demand
+      - scen1_lower
+      - scen1_mean
+      - scen1_upper
+    mix_scenarios:
+      - base_mix
+      - WEM
+      - WAM
+    baseline_demand_case: base_demand
 
 climate_module:
-  # Directory for climate results (relative to repository root).
-  output_directory: results/climate
-  # Copy of temperature outputs used as shared resources across modules.
-  resource_directory: resources/climate
-  # Sampling option for CSV outputs: 'default' (5-year steps to 2050, then 10-year) or 'full'.
-  sample_years_option: default
-  # Folder containing <scenario>_emission_difference.csv files (delta in Mt CO₂/yr; negative reduces emissions).
-  emission_timeseries_directory: resources
-
+  output_directory: results/climate  # Directory for climate results (relative to repository root).
+  resource_directory: results/climate  # Copy of temperature outputs used as shared resources across modules.
+  sample_years_option: default  # 'default' (5-year steps to 2050, then 10-year) or 'full'.
+  emission_timeseries_directory: results/emissions/All_countries  # Folder containing <scenario>/co2.csv (Mt CO₂/yr; output from calc_emissions aggregation).
   parameters:
-    # Simulation time grid (extend end_year for far-future projections).
-    start_year: 1750
-    end_year: 2100
-    timestep: 1.0  # Years per step; 1.0 = annual, 0.25 = quarterly (slower runtime).
-
-    # Climate presets and overrides (values applied to all configs unless overridden per scenario).
+    # Time grid inherits from time_horizon and stretches to cover the SCC damage window.
+    # Emission adjustments are held fixed at their terminal value when extrapolating past the reporting horizon.
     climate_setup: ar6  # Options include 'ar6' (default three-layer) and 'two_box'.
     deep_ocean_efficacy: 1.28  # Plausible range 0.5–1.5 (higher slows deep-ocean uptake).
     forcing_4co2: 7.4  # W/m² for 4×CO₂; AR6 central estimate ≈7.2–7.4.
     equilibrium_climate_sensitivity: 3.0  # °C per CO₂ doubling; likely range 2.0–5.0.
-
+    warming_reference_start_year: 1850  # Baseline reference window for anomalies.
+    warming_reference_end_year: 1900
+  fair:
+    calibration:
+      enabled: true
+      base_path: data/FaIR_calibration_data/v1.5.0
+      ensemble_file: calibrated_constrained_parameters.csv
+      species_file: species_configs_properties.csv
+      ch4_lifetime_file: CH4_lifetime.csv
+      historical_emissions_file: historical_emissions_1750-2023_cmip7.csv
+      solar_forcing_file: solar_forcing_timebounds.csv
+      volcanic_forcing_file: volcanic_forcing_timebounds.csv
+      landuse_scale_file: landuse_scale_factor.csv
+      landuse_scale_label: historical_best
+      lapsi_scale_file: lapsi_scale_factor.csv
+      lapsi_scale_label: historical_best
+      warming_baselines_file: warming_baselines.csv
+      warming_baseline_label: 941
+      warming_baseline_column: "temperature 2004-2023"
+      ensemble_member_id: 1299
+      co2_species_name: CO2
+      ch4_lifetime_label: historical_best
   climate_scenarios:
-    # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
-    run: all
+    run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
+      - ssp245
+      #- ssp370  
     definitions:
-      - id: ssp119  # Strong mitigation SSP (aggressive climate action)
-        label: ssp119
-        adjustment_specie: CO2 FFI  # Emission adjustments are specified in Mt CO₂/yr.
-      - id: ssp245  # Middle-of-the-road SSP (reference case)
-        label: ssp245
+      - id: ssp119
+        label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
         adjustment_specie: CO2 FFI
-      - id: ssp370  # Higher-emission SSP (limited mitigation)
-        label: ssp370
+      - id: ssp126
+        label: ssp126  # SSP1-2.6: well-below 2°C, early peaking and sustained reductions
         adjustment_specie: CO2 FFI
-
+      - id: ssp245
+        label: ssp245  # SSP2-4.5: middle-of-the-road, intermediate forcing
+        adjustment_specie: CO2 FFI
+      - id: ssp370
+        label: ssp370  # SSP3-7.0: regional rivalry, high challenges to mitigation
+        adjustment_specie: CO2 FFI
+      - id: ssp585
+        label: ssp585  # SSP5-8.5: fossil-fuel intensive, high-end stress-test scenario
+        adjustment_specie: CO2 FFI
   emission_scenarios:
-    # Emission scenarios to load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
-    run: all
+    run: all  # Load from <scenario>_emission_difference.csv (Mt CO₂/yr deltas; use 'all' or list of names).
+
+pattern_scaling:
+  output_directory: results/climate_scaled
+  scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv  # Columns: name, iso3, continent, scenario, patterns.* (weighting basis)
+  scaling_weighting: area  # Options: gdp.2000, gdp.2100, pop.2000, pop.2100, area (default)
+  countries:
+    - ALB
+    - BIH
+    - MKD
+    - KOS # Kosovo, unofficially assigned ISO3 code
+    - SRB
+    - MNE
+
+air_pollution:
+  output_directory: results/air_pollution
+  concentration_measure: median  # Default concentration statistic to use when available.
+  concentration_fallback_order:  # Ordered fallback when the preferred measure is missing.
+    - median
+    - mean
+    - min
+    - max
+  electricity_share: 0.07  # Fraction of ambient pollution attributable to electricity generation (defaults to 0.07 from literature checks).
+  country_weights: equal  # Use 'equal' for uniform averaging or provide {Country: weight}.
+  scenarios: all  # 'all' or list of emission scenario names to process.
+  value_of_statistical_life_usd: 3750000  # Monetised value per statistical life (USD-2025).
+  pollutants:
+    pm25:
+      stats_file: data/air_pollution/PM25_country_stats.csv
+      relative_risk: 1.08  # RR for a 10 µg/m³ change (log-linear model).
+      reference_delta: 10.0  # µg/m³ associated with the relative_risk value.
+      # country_weights:
+      #   Bosnia and Herzegovenia: 2.0
+      #   Kosovo: 1.0
+    nox:
+      stats_file: data/air_pollution/NOx_country_stats.csv
+      relative_risk: 1.03
+      reference_delta: 10.0
+
+socioeconomics:
+  mode: dice  # Options: 'ssp' (use IIASA SSP GDP/POP tables) or 'dice' (generate DICE trajectories).
+  dice: #source: Rickels, W., Meier, F., & Quaas, M. (2023). The historical social cost of fossil and industrial CO2 emissions. Nature Climate Change 2023 13:7, 13(7), 742–747. https://doi.org/10.1038/s41558-023-01709-1
+    start_year: 2019  # Earliest year for capital/population dynamics (pre-base spin-up).
+    scenario: as_climate_scenario  # SSP driving DICE projections; mirrors active climate SSP by default.
+    population:
+      initial_population_million: 7713.47  # Global population in the start year (millions).
+      logistic_growth: 0.028  # Logistic growth rate governing the approach to the asymptote.
+      asymptote_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv  # CSV with SSP-specific population asymptotes.
+    tfp:
+      initial_level_label: nordhaus  # Label in dice_tfp_initial_levels.csv for the starting TFP level.
+      decline_rate: 0.005  # Exogenous decline in TFP growth per year.
+      scenario_growth_table_path: data/GDP_and_Population_data/DICE/dice_scenarios.csv  # CSV containing SSP-specific TFP growth.
+      initial_levels_table_path: data/GDP_and_Population_data/DICE/dice_tfp_initial_levels.csv  # CSV mapping labels to initial TFP levels.
+    capital:
+      depreciation_rate: 0.0369791  # Annual depreciation rate for the capital stock.
+      savings_rate: 0.223  # Fraction of output reinvested each year.
+      capital_output_ratio: 3.41  # Output-to-capital ratio (K/Y) used in production.
+      initial_stock_trillions: null  # Initial capital stock (trillion USD); null solves from steady state.
+    capital_share: 0.36507  # Labour-share complement (α) in the Cobb–Douglas production function.
+  currency_conversion:
+    usd_2017_to_2025: 1.28  # PPP GDP deflator to convert 2017 USD to 2025 USD (BEA GDPDEF).
+    usd_2023_to_2025: 1.05  # PPP GDP deflator to convert 2023 USD to 2025 USD (BEA GDPDEF).
 
 pattern_scaling:
   output_directory: results/climate_scaled
@@ -159,59 +158,67 @@ pattern_scaling:
     - SRB
     - MNE
 economic_module:
-  # Folder receiving SCC summary, detail, and per-year CSVs.
-  output_directory: results/economic
-  # GDP (and optional population) time series with columns: year, gdp_trillion_usd [, population_million].
-  # Provide a CSV to override the SSP-derived data or leave null to rely on the directory below.
-  gdp_series: null
-  # Directory containing SSP GDP/Population datasets (GDP_SSP1_5.xlsx, POP_SSP1_5.xlsx).
-  gdp_population_directory: data/GDP_and_Population_data
-  # Absolute or anomaly temperature pathways per scenario (°C). Keys must match emission_series.
-  # Use the climate-module output CSVs (temperature_baseline/temperature_adjusted columns).
-  temperature_series:
-    baseline: resources/climate/energy_mix_B_ssp245.csv
-    policy: resources/climate/energy_mix_A_ssp245.csv
-  # Annual CO₂ deltas per scenario. CSVs must expose 'year' plus the column named in emission_column.
-  # Use the FaIR-compatible output in resources/<scenario>/co2.csv.
-  emission_series:
-    baseline: resources/energy_mix_B/co2.csv
-    policy: resources/energy_mix_A/co2.csv
-  # Scenario label treated as the baseline when computing damage differences.
-  reference_scenario: baseline
-  # Additional scenarios (besides the reference) evaluated by default.
+  output_directory: results/economic  # Folder for SCC/damage CSV outputs (prefixed by results.run_directory).
+  write_damages: true  # Toggle emission-scenario damage exports; set false for SCC-only workflows.
+  gdp_series: null  # Optional GDP override CSV; leave null to use socioeconomics settings instead.
+  gdp_population_directory: data/GDP_and_Population_data  # IIASA GDP/Population directory when socioeconomics.mode == 'ssp'.
+  run:
+    pulse:
+      mode: ssp_only  # SCC pulse mode (SSP-based FaIR pulses around SSP baselines; scenario-based SCC has been removed).
+      pulse_size_tco2: 1.0  # Size of the FaIR pulse (t CO₂) applied per emissions year.
+  data_sources:
+    emission_root: results/emissions/All_countries  # Aggregated emissions root produced by calc_emissions.
+    temperature_root: results/climate  # Directory hosting temperature CSVs named <scenario>_<ssp>.csv.
+  reference_scenario: base_mix__base_demand  # Baseline scenario for SCC calculations.
   evaluation_scenarios:
-    - policy
-  # Present-value reference year for discounting (must exist in the GDP/temperature grids).
-  base_year: 2025
-  # SCC aggregation style: 'average' (policy-wide USD/tCO₂) or 'per_year' (report time series).
-  aggregation: average
-  # Column name in emission CSVs (FaIR export uses 'delta' for Mt CO₂/yr differences).
-  emission_column: delta
-  # Unit converter applied to emission_column (1e6 converts Mt ➝ tonnes of CO₂).
-  emission_to_tonnes: 1000000.0
-  # Damage function configuration for DICE-style quadratic damages.
+    - base_mix__scen1_lower
+    - base_mix__scen1_upper
+  base_year: 2025  # Discounting/SCC base year; must match time_horizon.start.
+  damage_duration_years: 450  # Length of SCC window when extending beyond the reporting horizon.
+  aggregation: per_year  # SCC aggregation style: 'per_year' exports SCC(τ); 'average' collapses to a scalar.
+  aggregation_horizon:
+    start: 2025  # First evaluation year when aggregation == 'average'.
+    end: 2050  # Final evaluation year when aggregation == 'average'.
+  emission_column: delta  # Column to read from emission CSVs (delta or absolute).
+  emission_to_tonnes: 1000000.0  # Multiplier applied to emission values (1e6 converts Mt → t).
   damage_function:
-    delta1: 0.0
-    delta2: 0.002
-    use_threshold: false        # true to amplify damages past the threshold temperature.
-    threshold_temperature: 3.0  # °C at which threshold amplification starts.
-    threshold_scale: 0.2        # Multiplier applied to exceedance when threshold is enabled.
-    threshold_power: 2.0        # Power applied to the exceedance term.
-    use_saturation: false       # true to use a smooth rational saturation curve.
-    max_fraction: 0.99          # Maximum GDP loss fraction (also used for final clamp).
-    saturation_mode: rational   # 'rational' or 'clamp' when saturation is enabled.
-    use_catastrophic: false     # true to add catastrophe risk beyond catastrophic_temperature.
-    catastrophic_temperature: 5.0  # °C at which catastrophe risk begins.
-    disaster_fraction: 0.75     # Fractional GDP loss when catastrophe occurs.
-    disaster_gamma: 1.0         # Steepness of probabilistic catastrophe response.
-    disaster_mode: prob         # 'prob' (exponential) or 'step' catastrophe behaviour.
-  # Discounting configurations. Set run: all, or provide an explicit list of method identifiers.
+    mode: dice  # Switch between quadratic DICE baseline and custom polynomial coefficients.
+    delta1: 0.0  # Linear coefficient in the default DICE damage polynomial.
+    delta2: 0.00236  # Quadratic coefficient in the default DICE damage polynomial.
+    custom_terms:
+      - coefficient: 0.01202
+        exponent: 1.0
+      - coefficient: 0.01724
+        exponent: 1.5
+    use_threshold: false  # Enable temperature-threshold amplification beyond threshold_temperature.
+    threshold_temperature: 3.0  # Temperature where threshold amplification starts (°C).
+    threshold_scale: 0.2  # Scale factor applied during threshold amplification.
+    threshold_power: 2.0  # Power governing the curvature of the threshold amplification term.
+    use_saturation: false  # Enable saturation to smoothly cap damages at max_fraction.
+    max_fraction: 0.99  # Maximum allowable GDP damage fraction.
+    saturation_mode: rational  # 'rational' yields a smooth cap; 'clamp' clips once max_fraction is exceeded.
+    use_catastrophic: false  # Enable catastrophic add-ons when temperatures exceed catastrophic_temperature.
+    catastrophic_temperature: 5.0  # Temperature threshold for catastrophic damages (°C).
+    disaster_fraction: 0.75  # Fraction of GDP lost in catastrophic states.
+    disaster_gamma: 1.0  # Steepness parameter for probabilistic catastrophic mode.
+    disaster_mode: prob  # 'prob' adds damages probabilistically; 'step' jumps immediately at the threshold.
   methods:
-    run: all
-    # Fixed annual discount rate r; SCC uses 1/(1+r)^{t-base_year}.
+    run: ramsey_discount  # Primary discounting method to run (ramsey_discount or constant_discount).
     constant_discount:
-      discount_rate: 0.03
-    # Ramsey rule parameters: rho = pure time preference, eta = marginal utility elasticity.
-    ramsey_discount:
-      rho: 0.005
-      eta: 1.0
+      discount_rate: 0.03  # Fixed annual discount rate for constant_discount runs.
+    ramsey_discount: #source: Nesje, F., Drupp, M. A., Freeman, M. C., & Groom, B. (2023). Philosophers and economists agree on climate policy paths but for different reasons. Nature Climate Change 2023 13:6, 13(6), 515–522. https://doi.org/10.1038/s41558-023-01681-w
+      rho: 0.00625  # Pure rate of time preference (ρ); average between philosopher/economist views.
+      eta: 1.125  # Elasticity of marginal utility of consumption (η) for Ramsey discounting.
+
+results:
+  run_directory: null  # Optional top-level results/<run> directory (combined with run.output_subdir when provided).
+  summary:
+    years:
+      - 2030
+      - 2050
+    year_period: #to report air pollution mortality and damages over a period as a sum
+      - start: 2025
+        end: 2050
+    output_directory: results/summary
+    include_plots: true
+    plot_format: png

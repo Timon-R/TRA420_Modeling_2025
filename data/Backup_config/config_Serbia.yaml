@@ -1,0 +1,106 @@
+
+calc_emissions:
+  emission_factors_file: country_data/emission_factors_Serbia.csv
+  output_directory: resources/Serbia
+  years:
+    start: 2025
+    end: 2100
+    step: 5
+  demand_scenarios:
+    low:
+      description: Serbia low demand case (TWh).
+      values:
+        2025: 40
+        2030: 45
+        2040: 50
+        2050: 55
+        2060: 60
+        2070: 65
+        2080: 70
+        2090: 75
+        2100: 80
+    baseline:
+      description: Serbia baseline demand case (TWh).
+      values:
+        2025: 45
+        2030: 50
+        2040: 55
+        2050: 60
+        2060: 65
+        2070: 70
+        2080: 75
+        2090: 80
+        2100: 85
+    high:
+      description: Serbia high demand case (TWh).
+      values:
+        2025: 50
+        2030: 55
+        2040: 60
+        2050: 65
+        2060: 70
+        2070: 75
+        2080: 80
+        2090: 85
+        2100: 90
+  mix_scenarios:
+    reference:
+      description: Balanced mix with gradual decarbonisation.
+      shares:
+        coal: 0.25
+        gas: 0.30
+        nuclear: 0.12
+        hydro: 0.10
+        wind: 0.10
+        solar: 0.08
+        biomass: 0.05
+    renewables_push:
+      description: Accelerated deployment of wind and solar.
+      shares:
+        coal: 0.10
+        gas: 0.18
+        nuclear: 0.12
+        hydro: 0.12
+        wind: 0.22
+        solar: 0.20
+        biomass: 0.06
+    fossil_lockin:
+      description: Slower transition away from fossil generation.
+      shares:
+        coal: 0.40
+        gas: 0.35
+        nuclear: 0.07
+        hydro: 0.08
+        wind: 0.05
+        solar: 0.03
+        biomass: 0.02
+  baseline:
+    demand_scenario: baseline
+    mix_scenario: reference
+  scenarios:
+    - name: energy_mix_A
+      demand_scenario: high
+      mix_scenario: renewables_push
+    - name: energy_mix_B
+      demand_scenario: low
+      mix_scenario: fossil_lockin
+    - name: custom_example
+      demand_custom:
+        2025: 48
+        2030: 53
+        2040: 58
+        2050: 63
+        2060: 68
+        2070: 73
+        2080: 78
+        2090: 83
+        2100: 88
+      mix_custom:
+        shares:
+          coal: 0.15
+          gas: 0.25
+          nuclear: 0.15
+          hydro: 0.12
+          wind: 0.15
+          solar: 0.12
+          biomass: 0.06

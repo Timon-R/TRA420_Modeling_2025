@@ -2,14 +2,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-fair = pytest.importorskip("fair")
-
-from climate_module.FaIR import (
-    TemperatureResult,
-    _broadcast_matrix,
-    _broadcast_vector,
-    _to_delta_array,
-)
+try:  # pragma: no cover - handled via pytest skip
+    from climate_module.FaIR import (
+        TemperatureResult,
+        _broadcast_matrix,
+        _broadcast_vector,
+        _to_delta_array,
+    )
+except ImportError:
+    pytest.skip("FaIR dependency not available.", allow_module_level=True)
 
 
 def test_temperature_result_properties():

@@ -55,6 +55,8 @@ import numpy as np
 import pandas as pd
 from fair import FAIR
 
+from .calibration import FairCalibration, apply_fair_calibration
+
 # Path to the default AR6 species configuration bundled with FaIR.
 _SPECIES_CONFIG_PATH = Path(FAIR.fill_species_configs.__defaults__[0]).resolve()
 _SPECIES_CONFIG = pd.read_csv(_SPECIES_CONFIG_PATH, index_col=0)
@@ -160,6 +162,7 @@ def compute_temperature_change(
     timestep: float = 1.0,
     climate_setup: ClimateSetup = "ar6",
     climate_overrides: Mapping[str, ArrayLike] | None = None,
+    fair_calibration: FairCalibration | None = None,
 ) -> TemperatureResult:
     """Run FaIR for a baseline scenario and an adjusted emissions case.
 
@@ -209,6 +212,8 @@ def compute_temperature_change(
         timestep,
         climate_setup,
     )
+    if fair_calibration is not None:
+        apply_fair_calibration(model, fair_calibration, scenario_name)
     _apply_emission_adjustments(model, scenario_name, emission_adjustments)
     _apply_climate_overrides(model, climate_overrides)
     model.run(progress=False)
@@ -402,6 +407,13 @@ def _apply_emission_adjustments(
                 "adjustments can only be applied to emissions-driven species."
             )
         delta_array = _to_delta_array(delta, timepoints)
+        logger = logging.getLogger("climate.run")
+        logger.debug(
+            "Applying adjustment for specie %s: delta length %d, timepoints length %d",
+            specie,
+            len(delta_array),
+            len(timepoints),
+        )
         selection = {
             "specie": specie,
             "scenario": scenario,
@@ -423,6 +435,12 @@ def _to_delta_array(delta: ArrayLike, timepoints: np.ndarray) -> np.ndarray:
 
     array = np.asarray(delta, dtype=float)
     if array.shape[0] != timepoints.shape[0]:
+        logger = logging.getLogger("climate.run")
+        logger.debug(
+            "Mismatch in adjustment length: delta=%d, timepoints=%d",
+            array.shape[0],
+            timepoints.shape[0],
+        )
         raise ValueError(
             f"Emission adjustments must have length {timepoints.shape[0]}; "
             f"received {array.shape[0]}."
