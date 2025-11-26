@@ -15,6 +15,7 @@ from config_paths import get_config_path  # noqa: E402
 from results_summary import (  # noqa: E402
     build_summary,
     write_plots,
+    write_socioeconomic_tables,
     write_summary_csv,
 )
 
@@ -49,6 +50,11 @@ def main() -> None:
 
     summary_csv = write_summary_csv(settings, methods, metrics_map)
     logger.info("Summary CSV written to %s", summary_csv.relative_to(ROOT))
+
+    socio_outputs = write_socioeconomic_tables(settings)
+    if socio_outputs:
+        for path in socio_outputs:
+            logger.info("Socioeconomics written to %s", path.relative_to(ROOT))
 
     write_plots(settings, methods, metrics_map)
     if settings.include_plots:

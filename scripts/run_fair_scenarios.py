@@ -445,6 +445,40 @@ def _timeseries_adjustment_from_series(years: np.ndarray, deltas: np.ndarray):
     return builder
 
 
+def _apply_warming_baseline_scaling(result) -> None:
+    """Scale baseline/adjusted temperatures to match assessed warming, if configured."""
+
+    if FAIR_CALIBRATION is None or FAIR_CALIBRATION.warming_baseline is None:
+        return
+    target_info = FAIR_CALIBRATION.warming_baseline
+    target_value = target_info.get("value")
+    if target_value is None:
+        return
+
+    column = FAIR_CALIBRATION_CFG.get("warming_baseline_column")
+    if not column:
+        return
+    # Infer target period from column name, e.g. "temperature 2004-2023".
+    import re
+
+    years = re.findall(r"(?:19|20)\d{2}", str(column))
+    if len(years) < 2:
+        return
+    start_year = int(years[0])
+    end_year = int(years[-1])
+
+    mask = (result.years >= start_year) & (result.years <= end_year)
+    if not np.any(mask):
+        return
+    model_target = float(np.mean(result.baseline[mask]))
+    if not np.isfinite(model_target) or abs(model_target) < 1e-6:
+        return
+
+    scale = float(target_value) / model_target
+    result.baseline = result.baseline * scale
+    result.adjusted = result.adjusted * scale
+
+
 def _apply_reference_offset(result) -> None:
     mask = (result.years >= WARMING_REFERENCE_START) & (result.years <= WARMING_REFERENCE_END)
     if not np.any(mask):
@@ -455,6 +489,7 @@ def _apply_reference_offset(result) -> None:
     offset = float(np.mean(result.baseline[mask]))
     result.baseline = result.baseline - offset
     result.adjusted = result.adjusted - offset
+    _apply_warming_baseline_scaling(result)
 
 
 def _record_background(spec: ScenarioSpec, result) -> None:

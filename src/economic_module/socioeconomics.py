@@ -132,7 +132,7 @@ class DiceSocioeconomics:
         exponent = 1.0 / max(1e-9, 1.0 - self.capital_share)
         return base**exponent
 
-    def project(self, end_year: int) -> pd.DataFrame:
+    def project(self, end_year: int, *, currency_conversion: float = 1.0) -> pd.DataFrame:
         if end_year < self.start_year:
             raise ValueError("end_year must be greater than or equal to start_year.")
 
@@ -140,33 +140,59 @@ class DiceSocioeconomics:
         population_series = np.zeros(years.shape[0], dtype=float)
         gdp_series = np.zeros_like(population_series)
         gdp_per_capita = np.zeros_like(population_series)
+        gdp_growth_rate = np.full_like(population_series, fill_value=np.nan, dtype=float)
+        capital_series = np.zeros_like(population_series)
+        consumption_series = np.zeros_like(population_series)
+        consumption_per_capita = np.zeros_like(population_series)
+        tfp_series = np.zeros_like(population_series)
 
         population_million = float(self.initial_population_million)
         tfp_level = float(self.tfp_initial_level)
-        tfp_growth = float(self.tfp_initial_growth)
         capital = (
             float(self.initial_capital_trillions)
             if self.initial_capital_trillions is not None
             else self.capital_output_ratio * self._initial_equilibrium_output(population_million)
         )
 
-        for idx, _ in enumerate(years):
+        for idx, year in enumerate(years):
             labour_input = max(population_million, 1e-6) / 1000.0
             gdp = (
                 tfp_level
                 * (capital**self.capital_share)
                 * (labour_input ** (1.0 - self.capital_share))
             )
+
             population_series[idx] = population_million
             gdp_series[idx] = gdp
             gdp_per_capita[idx] = (gdp * 1e12) / max(population_million * 1e6, 1.0)
+            if idx > 0 and gdp_series[idx - 1] > 0:
+                gdp_growth_rate[idx] = (gdp_series[idx] - gdp_series[idx - 1]) / gdp_series[idx - 1]
+
+            tfp_series[idx] = tfp_level
+            capital_series[idx] = capital
+            consumption = (1.0 - self.savings_rate) * gdp
+            consumption_series[idx] = consumption
+            consumption_per_capita[idx] = (consumption * 1e12) / max(population_million * 1e6, 1.0)
 
             capital = (1.0 - self.depreciation_rate) * capital + self.savings_rate * gdp
-            population_million = population_million + self.logistic_growth * population_million * (
-                1.0 - population_million / max(self.population_asymptote_million, 1.0)
+
+            growth_rate = float(self.tfp_initial_growth) * np.exp(
+                -self.tfp_decline_rate * max(year - self.start_year, 0)
             )
-            tfp_level = tfp_level * (1.0 + tfp_growth)
-            tfp_growth = max(tfp_growth * (1.0 - self.tfp_decline_rate), 0.0)
+            tfp_level = tfp_level / max(1.0 - growth_rate, 1e-9)
+
+            population_million = population_million * (
+                (self.population_asymptote_million / max(population_million, 1e-9))
+                ** self.logistic_growth
+            )
+
+        conversion = float(currency_conversion)
+        if conversion not in (1.0, 1):
+            gdp_series = gdp_series * conversion
+            gdp_per_capita = gdp_per_capita * conversion
+            capital_series = capital_series * conversion
+            consumption_series = consumption_series * conversion
+            consumption_per_capita = consumption_per_capita * conversion
 
         frame = pd.DataFrame(
             {
@@ -175,6 +201,11 @@ class DiceSocioeconomics:
                 "population_persons": population_series * 1.0e6,
                 "gdp_trillion_usd": gdp_series,
                 "gdp_per_capita_usd": gdp_per_capita,
+                "gdp_growth_rate": gdp_growth_rate,
+                "capital_stock_trillion_usd": capital_series,
+                "consumption_trillion_usd": consumption_series,
+                "consumption_per_capita_usd": consumption_per_capita,
+                "tfp_level": tfp_series,
             }
         )
         return frame

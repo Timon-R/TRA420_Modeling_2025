@@ -24,10 +24,6 @@ DamageFunction = Callable[..., np.ndarray]
 SCCMethod = Literal["pulse"]
 SCCAggregation = Literal["per_year", "average"]
 
-IIASA_GDP_PPP2023_TO_USD2025 = (
-    1.05  # Source: BEA GDPDEF (FRED GDPDEF series, retrieved Nov 21, 2025).
-)
-
 _PULSE_RESULT_CACHE: dict[
     tuple[str, tuple[int, ...], float, float, float],
     dict[str, TemperatureResult],
@@ -86,7 +82,7 @@ def _wide_row_to_series(row: pd.Series) -> pd.Series:
 
 
 def _load_iiasa_economic_data(
-    ssp_family: str, directory: Path
+    ssp_family: str, directory: Path, *, gdp_conversion: float = 1.0
 ) -> tuple[pd.Series, pd.Series | None]:
     gdp_csv = directory / "GDP.csv"
     if not gdp_csv.exists():
@@ -113,7 +109,7 @@ def _load_iiasa_economic_data(
         if not pop_row.empty:
             population_series = _wide_row_to_series(pop_row.iloc[0])
 
-    gdp_series = gdp_series.sort_index() * IIASA_GDP_PPP2023_TO_USD2025
+    gdp_series = gdp_series.sort_index() * float(gdp_conversion)
     population_series = None if population_series is None else population_series.sort_index()
     return gdp_series, population_series
 
@@ -149,7 +145,9 @@ def _extend_gdp_frame(
     return frame
 
 
-def _load_ssp_economic_data(ssp_family: str, directory: Path) -> tuple[pd.Series, pd.Series | None]:
+def _load_ssp_economic_data(
+    ssp_family: str, directory: Path, *, gdp_conversion: float = 1.0
+) -> tuple[pd.Series, pd.Series | None]:
     """Load SSP GDP and population series for the requested family.
 
     Prefers the IIASA SSP Scenario Explorer extracts (`IIASA/GDP.csv`, `IIASA/Population.csv`).
@@ -166,7 +164,11 @@ def _load_ssp_economic_data(ssp_family: str, directory: Path) -> tuple[pd.Series
         gdp_csv = candidate / "GDP.csv"
         if gdp_csv.exists():
             try:
-                return _load_iiasa_economic_data(ssp_family, candidate)
+                return _load_iiasa_economic_data(
+                    ssp_family,
+                    candidate,
+                    gdp_conversion=float(gdp_conversion),
+                )
             except Exception as exc:  # pragma: no cover - propagate to fallback
                 last_error = exc
                 continue
@@ -196,6 +198,7 @@ class EconomicInputs:
     temperature_scenarios_c: dict[str, np.ndarray]
     emission_scenarios_tco2: dict[str, np.ndarray]
     population_million: np.ndarray | None = None
+    consumption_trillion_usd: np.ndarray | None = None
     climate_scenarios: dict[str, str] | None = None
     ssp_family: str | None = None
 
@@ -209,6 +212,11 @@ class EconomicInputs:
             raise ValueError("gdp_trillion_usd must match the length of years.")
         if self.population_million is not None and len(self.population_million) != length:
             raise ValueError("population_million must match the length of years.")
+        if (
+            self.consumption_trillion_usd is not None
+            and len(self.consumption_trillion_usd) != length
+        ):
+            raise ValueError("consumption_trillion_usd must match the length of years.")
         for name, temps in self.temperature_scenarios_c.items():
             if len(temps) != length:
                 raise ValueError(
@@ -252,8 +260,10 @@ class EconomicInputs:
         emission_to_tonnes: float = 1e6,
         gdp_column: str = "gdp_trillion_usd",
         population_column: str = "population_million",
+        consumption_column: str = "consumption_trillion_usd",
         gdp_frame: pd.DataFrame | None = None,
         gdp_population_directory: Path | str | None = None,
+        gdp_currency_conversion: float = 1.0,
     ) -> "EconomicInputs":
         """Load inputs from CSV files.
 
@@ -261,7 +271,8 @@ class EconomicInputs:
         containing ``year`` and the respective data columns. Emission values are
         scaled by ``emission_to_tonnes`` (default converts Mt CO₂ to t CO₂).
         ``gdp_frame`` can be provided directly to supply custom GDP/population
-        trajectories without reading from disk.
+        trajectories without reading from disk. ``gdp_currency_conversion`` scales
+        GDP read from disk (IIASA/CSV sources) to the desired price year.
         """
 
         if not temperature_paths or not emission_paths:
@@ -320,9 +331,17 @@ class EconomicInputs:
                     "or provide custom GDP data."
                 )
             ssp_family = families.pop()
-            gdp_series, population_series = _load_ssp_economic_data(
-                ssp_family, Path(gdp_population_directory)
-            )
+            try:
+                gdp_series, population_series = _load_ssp_economic_data(
+                    ssp_family,
+                    Path(gdp_population_directory),
+                    gdp_conversion=gdp_currency_conversion,
+                )
+            except TypeError:
+                gdp_series, population_series = _load_ssp_economic_data(
+                    ssp_family,
+                    Path(gdp_population_directory),
+                )
             gdp_series = gdp_series.sort_index()
             if population_series is not None:
                 population_series = _align_series(population_series.sort_index(), gdp_series.index)
@@ -350,7 +369,7 @@ class EconomicInputs:
             gdp_data_frame = _load_yearly_csv(
                 gdp_path,
                 required_columns={gdp_column},
-                optional_columns={population_column},
+                optional_columns={population_column, consumption_column},
             )
 
         year_bounds: list[tuple[int, int]] = []
@@ -386,9 +405,18 @@ class EconomicInputs:
             return series.to_numpy(dtype=float)
 
         gdp_series = _reindex_series(gdp_data_frame, gdp_column)
+        if (
+            gdp_frame is None
+            and gdp_population_directory is None
+            and gdp_currency_conversion not in (1.0, 1, None)
+        ):
+            gdp_series = gdp_series * float(gdp_currency_conversion)
         population = None
+        consumption = None
         if population_column in gdp_data_frame:
             population = _reindex_series(gdp_data_frame, population_column)
+        if consumption_column in gdp_data_frame:
+            consumption = _reindex_series(gdp_data_frame, consumption_column)
 
         temperature_series = {
             label: _reindex_series(frame, "temperature_c") for label, frame in temp_frames.items()
@@ -404,6 +432,7 @@ class EconomicInputs:
             temperature_scenarios_c=temperature_series,
             emission_scenarios_tco2=emission_series,
             population_million=population,
+            consumption_trillion_usd=consumption,
             climate_scenarios=climate_scenarios,
             ssp_family=ssp_family,
         )
@@ -416,6 +445,8 @@ class EconomicInputs:
         }
         if self.population_million is not None:
             data["population_million"] = self.population_million
+        if self.consumption_trillion_usd is not None:
+            data["consumption_trillion_usd"] = self.consumption_trillion_usd
         for scenario in scenario_list:
             data[_column("temperature_c", scenario)] = self.temperature(scenario)
             data[_column("emissions_tco2", scenario)] = self.emission(scenario)
@@ -440,6 +471,7 @@ class SCCResult:
     per_year: pd.DataFrame
     details: pd.DataFrame
     run_method: str | None = None
+    pulse_details: pd.DataFrame | None = None
 
 
 def _load_yearly_csv(
@@ -652,9 +684,17 @@ def _compute_consumption_growth(
 
     gdp_usd = inputs.gdp_trillion_usd * 1e12
     population = np.asarray(inputs.population_million, dtype=float) * 1e6
-    consumption = np.maximum(gdp_usd - reference_damage_usd, 0.0)
+    gross_consumption = (
+        np.asarray(inputs.consumption_trillion_usd, dtype=float) * 1e12
+        if inputs.consumption_trillion_usd is not None
+        else gdp_usd
+    )
+    consumption = np.maximum(gross_consumption - reference_damage_usd, 0.0)
     consumption_per_capita = np.divide(
         consumption, population, out=np.zeros_like(consumption), where=population > 0
+    )
+    np.divide(
+        gross_consumption, population, out=np.zeros_like(gross_consumption), where=population > 0
     )
 
     growth = np.full_like(consumption_per_capita, fill_value=np.nan, dtype=float)
@@ -723,6 +763,8 @@ def compute_scc_pulse(
     damage_func: DamageFunction = damage_dice,
     damage_kwargs: Mapping[str, float] | None = None,
     pulse_max_year: int | None = None,
+    fair_calibration: object | None = None,
+    climate_start_year: int | None = None,
 ) -> SCCResult:
     """Compute SCC by emission year using FaIR pulse runs per calendar year."""
 
@@ -735,6 +777,8 @@ def compute_scc_pulse(
 
     years = inputs.years.astype(int)
     start_year = int(years[0])
+    if climate_start_year is not None:
+        start_year = min(start_year, int(climate_start_year))
     end_year = int(years[-1])
 
     pulse_size_tco2 = 1_000_000.0
@@ -756,44 +800,19 @@ def compute_scc_pulse(
     if pulse_years.size == 0:
         raise ValueError("No pulse years fall within the requested evaluation window.")
 
+    calibration_token = id(fair_calibration) if fair_calibration is not None else None
     cache_key = (
         climate_id,
         tuple(int(v) for v in pulse_years.tolist()),
         float(start_year),
         float(end_year),
         pulse_size_mt,
+        calibration_token,
     )
-    if cache_key in _PULSE_RESULT_CACHE:
-        results = _PULSE_RESULT_CACHE[cache_key]
-    else:
-        specs: list[ScenarioSpec] = []
-        for tau in pulse_years:
-            up = step_change(pulse_size_mt, start_year=float(tau))
-            down = step_change(pulse_size_mt, start_year=float(tau + 1))
-
-            def pulse_builder_factory(up_fun, down_fun):
-                return lambda timepoints, cfg: up_fun(timepoints, cfg) - down_fun(timepoints, cfg)
-
-            pulse_builder = pulse_builder_factory(up, down)
-            specs.append(
-                ScenarioSpec(
-                    label=f"pulse_{tau}",
-                    scenario=climate_id,
-                    emission_adjustments={specie: pulse_builder},
-                    start_year=float(start_year),
-                    end_year=float(end_year),
-                    timestep=1.0,
-                )
-            )
-
-        climate_logger = logging.getLogger("climate_module")
-        previous_level = climate_logger.level
-        climate_logger.setLevel(max(previous_level, logging.WARNING))
-        try:
-            results = run_scenarios(specs)
-        finally:
-            climate_logger.setLevel(previous_level)
-        _PULSE_RESULT_CACHE[cache_key] = results
+    cached_results = _PULSE_RESULT_CACHE.get(cache_key)
+    if cached_results is None:
+        cached_results = {}
+        _PULSE_RESULT_CACHE[cache_key] = cached_results
 
     damage_df = compute_damage_difference(
         inputs,
@@ -818,6 +837,7 @@ def compute_scc_pulse(
         factors = _constant_discount_factors(years_float, base_year, discount_rate)
         consumption_pc = None
         growth = None
+        consumption_pc_gross = None
     elif discount_method == "ramsey_discount":
         if rho is None or eta is None:
             raise ValueError("rho and eta must be provided for pulse Ramsey discounting")
@@ -825,33 +845,101 @@ def compute_scc_pulse(
         consumption_pc, growth = _compute_consumption_growth(
             inputs, damage_df[reference_col].to_numpy()
         )
+        if inputs.population_million is not None:
+            population = np.asarray(inputs.population_million, dtype=float) * 1e6
+            gross_consumption = (
+                np.asarray(inputs.consumption_trillion_usd, dtype=float) * 1e12
+                if inputs.consumption_trillion_usd is not None
+                else gdp_usd
+            )
+            consumption_pc_gross = np.divide(
+                gross_consumption,
+                population,
+                out=np.zeros_like(gross_consumption),
+                where=population > 0,
+            )
+        else:
+            consumption_pc_gross = None
         factors = _ramsey_discount_factors(years_float, base_year, growth, rho=rho, eta=eta)
     else:
         raise ValueError(f"Unsupported discount method for pulse: {discount_method}")
 
     scc_series = np.full_like(years_float, fill_value=np.nan, dtype=float)
     pv_attributed = np.zeros_like(years_float, dtype=float)
-    for tau in pulse_years:
+    pulse_detail_records: list[dict[str, float]] = []
+    total_pulses = len(pulse_years)
+    years_int = years_float.astype(int)
+    climate_logger = logging.getLogger("climate_module")
+
+    for idx_counter, tau in enumerate(pulse_years, start=1):
         idx_candidates = np.where(years == tau)[0]
         if idx_candidates.size == 0:
             continue
         idx = int(idx_candidates[0])
-        delta_temp = results[f"pulse_{tau}"].delta
-        if delta_temp.shape[0] > temperature_ref.shape[0]:
-            delta_temp = delta_temp[: temperature_ref.shape[0]]
-        elif delta_temp.shape[0] < temperature_ref.shape[0]:
-            raise ValueError(
-                "Pulse temperature series shorter than baseline; check FaIR configuration."
+
+        label = f"pulse_{tau}"
+        pulse_result = cached_results.get(label)
+        if pulse_result is None:
+            up = step_change(pulse_size_mt, start_year=float(tau))
+            down = step_change(pulse_size_mt, start_year=float(tau + 1))
+
+            def pulse_builder_factory(up_fun, down_fun):
+                return lambda timepoints, cfg: up_fun(timepoints, cfg) - down_fun(timepoints, cfg)
+
+            pulse_builder = pulse_builder_factory(up, down)
+            spec = ScenarioSpec(
+                label=label,
+                scenario=climate_id,
+                emission_adjustments={specie: pulse_builder},
+                start_year=float(start_year),
+                end_year=float(end_year),
+                timestep=1.0,
+                compute_kwargs={"fair_calibration": fair_calibration} if fair_calibration else None,
             )
-        damages_with_pulse = (
-            damage_func(temperature_ref + delta_temp, **safe_damage_kwargs) * gdp_usd
+            previous_level = climate_logger.level
+            climate_logger.setLevel(max(previous_level, logging.WARNING))
+            try:
+                single_result = run_scenarios([spec])
+            finally:
+                climate_logger.setLevel(previous_level)
+            pulse_result = single_result[label]
+            cached_results[label] = pulse_result
+
+        pulse_years_full = pulse_result.years.astype(int)
+        delta_full = pulse_result.delta
+        delta_series = pd.Series(delta_full, index=pulse_years_full)
+        # Align pulse temperature response to SCC evaluation years
+        delta_temp = delta_series.reindex(years_int, method=None).fillna(0.0).to_numpy(dtype=float)
+
+        damages_with_pulse_fraction = damage_func(
+            temperature_ref + delta_temp, **safe_damage_kwargs
         )
+        damages_with_pulse = damages_with_pulse_fraction * gdp_usd
         delta_damage = damages_with_pulse - base_damage_usd
         pv = float(np.dot(delta_damage, factors))
         pv_attributed[idx] = pv
         beta_tau = float(factors[idx])
         if beta_tau > 0 and pulse_size_tco2 != 0.0:
             scc_series[idx] = pv / (beta_tau * pulse_size_tco2)
+        delta_fraction = damages_with_pulse_fraction - base_damage_fraction
+        for year_idx, year_value in enumerate(years_float):
+            pulse_detail_records.append(
+                {
+                    "pulse_year": int(tau),
+                    "year": int(year_value),
+                    "delta_temperature_c": float(delta_temp[year_idx]),
+                    "pulse_mass_tco2": float(pulse_size_tco2),
+                    "baseline_temperature_c": float(temperature_ref[year_idx]),
+                    "gdp_trillion_usd": float(inputs.gdp_trillion_usd[year_idx]),
+                    "delta_damage_fraction": float(delta_fraction[year_idx]),
+                    "delta_damage_usd": float(delta_damage[year_idx]),
+                    "discount_factor": float(factors[year_idx]),
+                    "pv_damage_usd": float(delta_damage[year_idx] * factors[year_idx]),
+                }
+            )
+        if total_pulses >= 10 and (idx_counter % 10 == 0 or idx_counter == total_pulses):
+            pct = 100.0 * idx_counter / float(total_pulses)
+            LOGGER.info("Computed pulse %s/%s (%.1f%%)", idx_counter, total_pulses, pct)
 
     per_year = damage_df[["year"]].copy()
     per_year["delta_emissions_tco2"] = damage_df[_column("emissions_tco2", scenario)].astype(
@@ -880,6 +968,7 @@ def compute_scc_pulse(
         details = details.assign(
             consumption_per_capita_usd=consumption_pc,
             consumption_growth=growth,
+            consumption_per_capita_gross_usd=consumption_pc_gross,
         )
 
     return SCCResult(
@@ -893,6 +982,7 @@ def compute_scc_pulse(
         per_year=per_year,
         details=details,
         run_method="pulse",
+        pulse_details=pd.DataFrame(pulse_detail_records) if pulse_detail_records else None,
     )
 
 
@@ -912,6 +1002,8 @@ def compute_scc(
     eta: float | None = None,
     discount_method: str | None = None,
     pulse_max_year: int | None = None,
+    fair_calibration: object | None = None,
+    climate_start_year: int | None = None,
 ) -> SCCResult:
     """Dispatch SCC computation (pulse method only)."""
 
@@ -941,6 +1033,8 @@ def compute_scc(
         damage_func=damage_func,
         damage_kwargs=damage_kwargs,
         pulse_max_year=pulse_max_year,
+        fair_calibration=fair_calibration,
+        climate_start_year=climate_start_year,
     )
 
 

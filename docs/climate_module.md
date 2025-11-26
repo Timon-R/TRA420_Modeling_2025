@@ -10,8 +10,9 @@ temperature trajectories for baseline and emission-adjusted scenarios.
 - `TemperatureResult`: container with `years`, `timepoints` (mid-year),
   `baseline`, `adjusted`, and convenience properties `delta`, `final_delta`,
   `to_frame()`.
-- `DEFAULT_SPECIES`: curated subset of FaIR species covering major greenhouse
-  gases and aerosol forcings.
+- `DEFAULT_SPECIES`: the full AR6 species catalogue exposed by FaIR. All
+  greenhouse gases, aerosol categories, contrails, land-use, and LAPSI forcings
+  are registered so calibration-provided adjustments affect every forcing agent.
 - `CLIMATE_PRESETS`: preset parameter bundles (`ar6`, `two_box`) configuring
   ocean heat capacities, transfer coefficients, deep-ocean efficacy, and the
   4×CO₂ forcing strength.
@@ -33,7 +34,9 @@ temperature trajectories for baseline and emission-adjusted scenarios.
    are applied afterwards.
 5. **Initial state** – `_initialise_model_state` populates concentration,
    cumulative emissions, airborne emissions, and temperature at the first time
-   bound.
+   bound. When a calibration is active, historical emissions, Solar/Volcanic
+   forcing, and optional land-use/LAPSI scaling factors are injected so the
+   climate trajectory matches the IGCC baseline before the SSP branch.
 6. **Emission adjustments** – `_apply_emission_adjustments` transforms scalars,
    arrays, or callables (via `_to_delta_array`) into per-timepoint emission
    deltas added to the `adjusted` configuration.
@@ -73,7 +76,9 @@ Under `climate_module`:
   `forcing_4co2`, `equilibrium_climate_sensitivity`, and the anomaly
   reference window via `warming_reference_start_year` / `_end_year`). Runs now
   begin in 1750 so calibrated historical drivers are always replayed before
-  branching into SSP pathways.
+  branching into SSP pathways, and the baseline is subsequently re-referenced
+  to 1850–1900 and scaled to match the assessed warming target (e.g.,
+  temperature 2004–2023) when a calibration supplies that metadata.
 - `climate_scenarios`: list of FaIR/RCMIP pathways with per-scenario options:
   - `id`: scenario identifier (e.g., `ssp245`).
   - `label`: output label suffix.
@@ -115,8 +120,10 @@ following options customise the run:
 - `historical_emissions_file`, `solar_forcing_file`, `volcanic_forcing_file`:
   CMIP7 driver tables replayed from 1750 prior to the SSP branch.
 - `landuse_scale_file`/`lapsi_scale_file` and labels: provide scalar tweaks for
-  land-use and LAPSI forcing streams (optional—defaults include the
-  `historical_best` rows).
+  land-use and LAPSI forcing streams. These scaling factors are now applied to
+  the “Land use” and “Light absorbing particles on snow and ice” forcing series
+  immediately after Solar/Volcanic overrides, ensuring calibrated land-use and
+  LAPSI forcings carry through every FaIR run.
 - `warming_baselines_file`, `warming_baseline_label`,
   `warming_baseline_column`: retain metadata on the IGCC baseline/target
   windows for reporting (no extra computation required in the runner).

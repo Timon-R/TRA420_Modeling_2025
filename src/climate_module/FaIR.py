@@ -48,18 +48,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Union
 
 import numpy as np
 import pandas as pd
 from fair import FAIR
+from fair.io import read_properties
 
 from .calibration import FairCalibration, apply_fair_calibration
-
-# Path to the default AR6 species configuration bundled with FaIR.
-_SPECIES_CONFIG_PATH = Path(FAIR.fill_species_configs.__defaults__[0]).resolve()
-_SPECIES_CONFIG = pd.read_csv(_SPECIES_CONFIG_PATH, index_col=0)
 
 LOGGER = logging.getLogger("climate_module")
 if not LOGGER.handlers:
@@ -70,25 +66,10 @@ if not LOGGER.handlers:
 LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
-# Species required to reproduce the main AR6 forcing components while keeping
-# the configuration compact. Emission adjustments are only supported for the
-# species that are driven by emissions in this list.
-DEFAULT_SPECIES: Sequence[str] = (
-    "CO2 FFI",
-    "CO2 AFOLU",
-    "CO2",
-    "CH4",
-    "N2O",
-    "Solar",
-    "Volcanic",
-    "Aerosol-radiation interactions",
-    "Aerosol-cloud interactions",
-    "Ozone",
-    "Stratospheric water vapour",
-    "Contrails",
-    "Land use",
-    "Light absorbing particles on snow and ice",
-)
+_SPECIES_NAMES, _SPECIES_LOOKUP = read_properties()
+
+# Use the full AR6 species catalogue so FaIR captures every radiative forcing agent.
+DEFAULT_SPECIES: Sequence[str] = tuple(_SPECIES_NAMES)
 
 # Scenario aliases exposed for convenience. All names must exist in the RCMIP
 # database that ships with FaIR.
@@ -258,14 +239,13 @@ def _build_model(
 
 def _species_properties(species: Sequence[str]) -> Mapping[str, Mapping[str, object]]:
     """Extract the FaIR species metadata for the requested subset."""
-    try:
-        subset = _SPECIES_CONFIG.loc[list(species)]
-    except KeyError as exc:
-        missing = sorted(set(species) - set(_SPECIES_CONFIG.index))
-        raise ValueError(f"Species not recognised by FaIR defaults: {missing}") from exc
-
     properties: dict[str, dict[str, object]] = {}
-    for specie, row in subset.iterrows():
+    missing: list[str] = []
+    for specie in species:
+        row = _SPECIES_LOOKUP.get(specie)
+        if row is None:
+            missing.append(specie)
+            continue
         properties[specie] = {
             "type": row["type"],
             "input_mode": row["input_mode"],
@@ -275,6 +255,8 @@ def _species_properties(species: Sequence[str]) -> Mapping[str, Mapping[str, obj
                 row["aerosol_chemistry_from_concentration"]
             ),
         }
+    if missing:
+        raise ValueError(f"Species not recognised by FaIR defaults: {sorted(missing)}")
     return properties
 
 

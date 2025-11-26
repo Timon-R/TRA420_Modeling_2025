@@ -37,13 +37,15 @@ The script loads GDP, temperature, and emission difference series, feeds them in
 from __future__ import annotations
 
 import argparse
+import contextlib
+import logging
+import math
 import re
 import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Sequence, cast
 
-import generate_summary
 import numpy as np
 import pandas as pd
 import yaml
@@ -123,6 +125,7 @@ def _safe_name(name: str) -> str:
 def _write_scc_outputs(result: SCCResult, method: str, climate_key: str, output_dir: Path) -> None:
     """Export pulse SCC timeseries for a given climate pathway/method."""
     safe_climate = _safe_name(climate_key)
+    safe_method = _safe_name(method)
     per_year = result.per_year.copy()
     required = [
         "year",
@@ -153,8 +156,39 @@ def _write_scc_outputs(result: SCCResult, method: str, climate_key: str, output_
         frame["discounted_delta_usd"] = per_year["discounted_delta_usd"].astype(float)
     else:
         frame["discounted_delta_usd"] = np.nan
-    pulse_path = output_dir / f"pulse_scc_timeseries_{method}_{safe_climate}.csv"
+    pulse_path = output_dir / f"pulse_scc_timeseries_{safe_method}_{safe_climate}.csv"
     frame.to_csv(pulse_path, index=False)
+
+    if result.pulse_details is not None and not result.pulse_details.empty:
+        detail = result.pulse_details.copy()
+        keep_columns = [
+            "pulse_year",
+            "year",
+            "delta_temperature_c",
+            "pulse_mass_tco2",
+            "baseline_temperature_c",
+            "gdp_trillion_usd",
+            "delta_damage_fraction",
+            "delta_damage_usd",
+            "discount_factor",
+            "pv_damage_usd",
+        ]
+        missing_cols = [col for col in keep_columns if col not in detail.columns]
+        if missing_cols:
+            raise KeyError(f"Pulse detail table missing required columns: {missing_cols}")
+        detail = detail[keep_columns].copy()
+        detail["pulse_year"] = detail["pulse_year"].astype(int)
+        detail["year"] = detail["year"].astype(int)
+        detail["delta_temperature_c"] = detail["delta_temperature_c"].astype(float)
+        detail["pulse_mass_tco2"] = detail["pulse_mass_tco2"].astype(float)
+        detail["baseline_temperature_c"] = detail["baseline_temperature_c"].astype(float)
+        detail["gdp_trillion_usd"] = detail["gdp_trillion_usd"].astype(float)
+        detail["delta_damage_fraction"] = detail["delta_damage_fraction"].astype(float)
+        detail["delta_damage_usd"] = detail["delta_damage_usd"].astype(float)
+        detail["discount_factor"] = detail["discount_factor"].astype(float)
+        detail["pv_damage_usd"] = detail["pv_damage_usd"].astype(float)
+        detail_path = output_dir / f"detailed_pulse_response_{safe_climate}.csv"
+        detail.to_csv(detail_path, index=False)
 
 
 def _build_damage_table(
@@ -289,11 +323,38 @@ def _max_required_year(time_cfg: Mapping[str, object], economic_cfg: Mapping[str
     return max(end_candidates)
 
 
+def _currency_label_from_key(key: str) -> str | None:
+    match = re.search(r"to_(\d{4})", key)
+    if match:
+        return f"USD_{match.group(1)}"
+    digits = re.findall(r"(?:19|20|21)\d{2}", key)
+    if digits:
+        return f"USD_{digits[-1]}"
+    return None
+
+
+def _get_currency_conversion(
+    root_cfg: Mapping[str, object], key: str, default: float = 1.0
+) -> tuple[float, str]:
+    socio_cfg = root_cfg.get("socioeconomics", {}) if isinstance(root_cfg, Mapping) else {}
+    conv_cfg = socio_cfg.get("currency_conversion", {}) if isinstance(socio_cfg, Mapping) else {}
+    try:
+        value = float(conv_cfg.get(key, default))
+    except Exception:
+        value = float(default)
+    if math.isclose(value, 1.0, rel_tol=1e-9, abs_tol=1e-9):
+        return value, "USD_native"
+    label = _currency_label_from_key(key) or "USD_converted"
+    return value, label
+
+
 def _build_socioeconomic_projection(
     root_cfg: Mapping[str, object],
     *,
     end_year: int,
     climate_label: str | None,
+    currency_conversion: float = 1.0,
+    currency_label: str = "USD_native",
 ) -> pd.DataFrame | None:
     socio_cfg = root_cfg.get("socioeconomics", {}) or {}
     mode = str(socio_cfg.get("mode", "")).strip().lower()
@@ -315,9 +376,20 @@ def _build_socioeconomic_projection(
         resolved = f"SSP{match.group(1)}"
     else:
         resolved = scenario_setting.upper()
+
     dice_cfg["scenario"] = resolved
     model = DiceSocioeconomics.from_config(dice_cfg, base_path=ROOT)
-    return model.project(end_year)
+    frame = model.project(end_year)
+    if currency_conversion not in (1.0, 1):
+        factor = float(currency_conversion)
+        for column in ("gdp_trillion_usd", "consumption_trillion_usd"):
+            if column in frame.columns:
+                frame[column] = frame[column].astype(float) * factor
+        for column in ("gdp_per_capita_usd", "consumption_per_capita_usd"):
+            if column in frame.columns:
+                frame[column] = frame[column].astype(float) * factor
+    frame.attrs["currency_label"] = currency_label
+    return frame
 
 
 def _load_config() -> dict:
@@ -426,20 +498,62 @@ def _generate_ssp_temperature_frames(
     econ_cfg = root_cfg.get("economic_module", {}) or {}
     parameters = climate_cfg.get("parameters", {}) or {}
 
-    horizon_start = float(time_horizon.get("start", parameters.get("start_year", 1750.0)))
+    default_start = float(parameters.get("start_year", 1750.0))
+    horizon_start = default_start
     horizon_end = float(time_horizon.get("end", parameters.get("end_year", horizon_start)))
     damage_duration = econ_cfg.get("damage_duration_years")
     if isinstance(damage_duration, (int, float)) and damage_duration > 0:
         horizon_end = max(horizon_end, horizon_start + float(damage_duration) - 1)
 
-    base_start = float(parameters.get("start_year", horizon_start))
-    base_end = float(parameters.get("end_year", horizon_end))
+    base_start = float(parameters.get("start_year", default_start))
+    base_end = float(parameters.get("end_year", max(horizon_end, horizon_start)))
     base_timestep = float(parameters.get("timestep", 1.0))
     base_setup = parameters.get("climate_setup", "ar6")
     base_overrides = {key: parameters[key] for key in CLIMATE_OVERRIDE_KEYS if key in parameters}
 
-    calibration_cfg = climate_cfg.get("fair", {}).get("calibration", {})
+    calibration_cfg = climate_cfg.get("fair", {}).get("calibration", {}) or {}
     calibration = load_fair_calibration(calibration_cfg, repo_root=ROOT)
+
+    warming_ref_start = float(parameters.get("warming_reference_start_year", 1850.0))
+    warming_ref_end = float(parameters.get("warming_reference_end_year", 1900.0))
+
+    def _apply_reference_and_warming(result) -> None:
+        """Apply 1850-1900 reference offset and optional warming-baseline scaling."""
+        import re as _re
+
+        import numpy as _np
+
+        # Reference offset relative to 1850–1900 (or configured window)
+        mask = (result.years >= warming_ref_start) & (result.years <= warming_ref_end)
+        if not _np.any(mask):
+            return
+        offset = float(_np.mean(result.baseline[mask]))
+        result.baseline = result.baseline - offset
+        result.adjusted = result.adjusted - offset
+
+        if calibration is None or calibration.warming_baseline is None:
+            return
+        target_info = calibration.warming_baseline
+        target_value = target_info.get("value")
+        if target_value is None:
+            return
+        column = calibration_cfg.get("warming_baseline_column")
+        if not column:
+            return
+        years = _re.findall(r"(?:19|20)\d{2}", str(column))
+        if len(years) < 2:
+            return
+        start_year = int(years[0])
+        end_year = int(years[-1])
+        mask_target = (result.years >= start_year) & (result.years <= end_year)
+        if not _np.any(mask_target):
+            return
+        model_target = float(_np.mean(result.baseline[mask_target]))
+        if not _np.isfinite(model_target) or abs(model_target) < 1e-6:
+            return
+        scale = float(target_value) / model_target
+        result.baseline = result.baseline * scale
+        result.adjusted = result.adjusted * scale
 
     specs: list[ScenarioSpec] = []
     label_lookup: dict[str, str] = {}
@@ -477,6 +591,7 @@ def _generate_ssp_temperature_frames(
     frames: dict[str, pd.DataFrame] = {}
     for spec in specs:
         result = results[spec.label]
+        _apply_reference_and_warming(result)
         frame = pd.DataFrame(
             {
                 "year": result.years.astype(int),
@@ -505,9 +620,12 @@ def _write_scc_fallback_plots(
     root_cfg: Mapping[str, object],
     scc_cache: Mapping[tuple[str | None, str], SCCResult],
     socio_cache: Mapping[str, pd.DataFrame | None],
+    *,
+    socio_output_dir: Path | None = None,
 ) -> None:
     if not scc_cache:
         return
+    base_year = int((root_cfg.get("economic_module", {}) or {}).get("base_year", 2025))
     summary_dir = _fallback_summary_dir(root_cfg)
     plot_dir = summary_dir / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -559,11 +677,28 @@ def _write_scc_fallback_plots(
     ]
     if socio_entries:
         socio_entries.sort(key=lambda item: item[0])
+        target_dir = socio_output_dir or summary_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for label, frame in socio_entries:
+            safe_label = _safe_name(label)
+            currency_label = frame.attrs.get("currency_label", f"USD_{base_year}")
+            socio_frame = frame.copy()
+            socio_frame.attrs["currency_label"] = currency_label
+            rename_map = {
+                "gdp_trillion_usd": f"gdp_trillion_usd_{currency_label}",
+                "gdp_per_capita_usd": f"gdp_per_capita_usd_{currency_label}",
+                "consumption_trillion_usd": f"consumption_trillion_usd_{currency_label}",
+                "consumption_per_capita_usd": f"consumption_per_capita_usd_{currency_label}",
+            }
+            socio_frame = socio_frame.rename(
+                columns={k: v for k, v in rename_map.items() if k in socio_frame.columns}
+            )
+            full_path = target_dir / f"socioeconomics_{safe_label}.csv"
+            with contextlib.suppress(Exception):
+                socio_frame.to_csv(full_path, index=False)
 
     gdp_fig = gdp_ax = None
-    gdp_combined: pd.DataFrame | None = None
     pop_fig = pop_ax = None
-    pop_combined: pd.DataFrame | None = None
 
     for label, frame in socio_entries:
         if "gdp_trillion_usd" in frame.columns:
@@ -572,30 +707,12 @@ def _write_scc_fallback_plots(
             years = frame["year"].astype(int)
             values = frame["gdp_trillion_usd"].astype(float)
             gdp_ax.plot(years, values, label=label)
-            column_name = f"gdp_trillion_usd_{_safe_name(label)}"
-            series = frame[["year", "gdp_trillion_usd"]].rename(
-                columns={"gdp_trillion_usd": column_name}
-            )
-            gdp_combined = (
-                series
-                if gdp_combined is None
-                else gdp_combined.merge(series, on="year", how="outer")
-            )
         if "population_million" in frame.columns:
             if pop_ax is None:
                 pop_fig, pop_ax = plt.subplots()
             years = frame["year"].astype(int)
             values = frame["population_million"].astype(float)
             pop_ax.plot(years, values, label=label)
-            column_name = f"population_million_{_safe_name(label)}"
-            series = frame[["year", "population_million"]].rename(
-                columns={"population_million": column_name}
-            )
-            pop_combined = (
-                series
-                if pop_combined is None
-                else pop_combined.merge(series, on="year", how="outer")
-            )
 
     if gdp_ax is not None and gdp_fig is not None:
         gdp_ax.set_title("Socioeconomics – GDP trajectories")
@@ -606,9 +723,8 @@ def _write_scc_fallback_plots(
         gdp_fig.tight_layout()
         gdp_fig.savefig(plot_dir / "socioeconomics_gdp.png", dpi=200)
         plt.close(gdp_fig)
-        if gdp_combined is not None:
-            gdp_combined = gdp_combined.sort_values("year").reset_index(drop=True)
-            gdp_combined.to_csv(summary_dir / "socioeconomics_gdp.csv", index=False)
+        old_gdp = summary_dir / "socioeconomics_gdp.csv"
+        old_gdp.unlink(missing_ok=True)
 
     if pop_ax is not None and pop_fig is not None:
         pop_ax.set_title("Socioeconomics – Population trajectories")
@@ -619,9 +735,8 @@ def _write_scc_fallback_plots(
         pop_fig.tight_layout()
         pop_fig.savefig(plot_dir / "socioeconomics_population.png", dpi=200)
         plt.close(pop_fig)
-        if pop_combined is not None:
-            pop_combined = pop_combined.sort_values("year").reset_index(drop=True)
-            pop_combined.to_csv(summary_dir / "socioeconomics_population.csv", index=False)
+        old_pop = summary_dir / "socioeconomics_population.csv"
+        old_pop.unlink(missing_ok=True)
 
     print(f"[SCC] Fallback SCC plots written to {plot_dir.relative_to(ROOT)}")
 
@@ -631,6 +746,8 @@ def _run_summary_outputs(
     scc_cache: Mapping[tuple[str | None, str], SCCResult],
     socio_cache: Mapping[str, pd.DataFrame | None],
     has_emissions: bool,
+    *,
+    socio_output_dir: Path | None = None,
 ) -> None:
     if not scc_cache:
         return
@@ -639,6 +756,8 @@ def _run_summary_outputs(
         argv_backup = sys.argv.copy()
         try:
             sys.argv = ["generate_summary.py"]
+            from scripts import generate_summary
+
             generate_summary.main()
             return
         except Exception as exc:  # pragma: no cover - best-effort summary
@@ -647,7 +766,7 @@ def _run_summary_outputs(
             sys.argv = argv_backup
     else:
         print("[SCC] Emission data missing; writing SCC fallback plots only.")
-    _write_scc_fallback_plots(root_cfg, scc_cache, socio_cache)
+    _write_scc_fallback_plots(root_cfg, scc_cache, socio_cache, socio_output_dir=socio_output_dir)
 
 
 def _parse_climate_labels(value: object) -> list[str]:
@@ -724,6 +843,7 @@ def _restrict_inputs_window(
 
     gdp = inputs.gdp_trillion_usd
     population = inputs.population_million
+    consumption = inputs.consumption_trillion_usd
     temp_series = dict(inputs.temperature_scenarios_c)
     emission_series = dict(inputs.emission_scenarios_tco2)
 
@@ -737,6 +857,9 @@ def _restrict_inputs_window(
             if population is not None:
                 pop_extension = np.full(extra_years.shape, population[-1], dtype=float)
                 population = np.concatenate([population, pop_extension])
+            if consumption is not None:
+                cons_extension = np.full(extra_years.shape, consumption[-1], dtype=float)
+                consumption = np.concatenate([consumption, cons_extension])
 
             for name, series in temp_series.items():
                 extension = np.full(extra_years.shape, series[-1], dtype=float)
@@ -755,6 +878,7 @@ def _restrict_inputs_window(
     selected_years = years[mask]
     gdp_selected = gdp[mask]
     population_selected = population[mask] if population is not None else None
+    consumption_selected = consumption[mask] if consumption is not None else None
     temperatures = {label: series[mask] for label, series in temp_series.items()}
     emissions = {label: series[mask] for label, series in emission_series.items()}
 
@@ -768,6 +892,7 @@ def _restrict_inputs_window(
         temperature_scenarios_c=temperatures,
         emission_scenarios_tco2=emissions,
         population_million=population_selected,
+        consumption_trillion_usd=consumption_selected,
         climate_scenarios=climate_scenarios,
         ssp_family=inputs.ssp_family,
     )
@@ -1204,6 +1329,10 @@ def _run_single_configuration(
     baseline_case = (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
+    climate_cfg_root = root_cfg.get("climate_module", {}) or {}
+    calibration_cfg = climate_cfg_root.get("fair", {}).get("calibration", {}) or {}
+    fair_calibration = load_fair_calibration(calibration_cfg, repo_root=ROOT)
+    climate_parameters = climate_cfg_root.get("parameters", {}) or {}
 
     parser = _build_parser(config, root_cfg)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -1249,6 +1378,12 @@ def _run_single_configuration(
     if gdp_path is None and not use_socioeconomics and args.gdp_population_directory:
         gdp_population_directory = _resolve_path(args.gdp_population_directory)
     socio_cache: dict[str, pd.DataFrame | None] = {}
+    currency_conv_2017, currency_label_2017 = _get_currency_conversion(
+        root_cfg, "usd_2017_to_2025", 1.0
+    )
+    currency_conv_2023, currency_label_2023 = _get_currency_conversion(
+        root_cfg, "usd_2023_to_2025", 1.0
+    )
 
     try:
         manual_temperature = _collect_sources(
@@ -1570,10 +1705,19 @@ def _run_single_configuration(
                         root_cfg,
                         end_year=required_year,
                         climate_label=climate_label,
+                        currency_conversion=currency_conv_2017,
+                        currency_label=currency_label_2017,
                     )
                 except (FileNotFoundError, ValueError) as exc:
                     parser.error(str(exc))
             gdp_frame_override = socio_cache.get(cache_key)
+
+        gdp_currency_conversion = 1.0
+        if gdp_frame_override is None:
+            if gdp_population_directory is not None:
+                gdp_currency_conversion = currency_conv_2023
+            elif gdp_path:
+                gdp_currency_conversion = currency_conv_2017
 
         inputs = EconomicInputs.from_csv(
             temp_map,
@@ -1584,6 +1728,7 @@ def _run_single_configuration(
             emission_to_tonnes=args.emission_unit_multiplier,
             gdp_frame=gdp_frame_override,
             gdp_population_directory=gdp_population_directory,
+            gdp_currency_conversion=gdp_currency_conversion,
         )
 
         working_inputs = inputs
@@ -1670,6 +1815,8 @@ def _run_single_configuration(
                 "pulse",
                 discount_method=discount_method,
                 pulse_max_year=pulse_max_year,
+                fair_calibration=fair_calibration,
+                climate_start_year=int(climate_parameters.get("start_year", 1750)),
                 **run_kwargs,
             )
 
@@ -1697,7 +1844,11 @@ def _run_single_configuration(
             parser.error("No SCC results generated; check climate scenario availability.")
 
     _run_summary_outputs(
-        root_cfg, scc_cache, socio_cache, has_emissions=emission_root_path is not None
+        root_cfg,
+        scc_cache,
+        socio_cache,
+        has_emissions=emission_root_path is not None,
+        socio_output_dir=output_dir,
     )
 
     if not scc_cache:
@@ -1801,6 +1952,15 @@ def _run_scenario_suite(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
+    econ_logger = logging.getLogger("economic_module")
+    econ_logger.setLevel(logging.INFO)
+    pulse_logger = logging.getLogger("economic_module.scc")
+    pulse_logger.setLevel(logging.INFO)
+    # Rely on root/economic_module handlers; avoid duplicate handlers on this logger.
+    pulse_logger.handlers.clear()
+    pulse_logger.propagate = True
     cli_args = list(argv) if argv is not None else sys.argv[1:]
     config_path = get_config_path(ROOT / "config.yaml")
     root_cfg = _load_config()
