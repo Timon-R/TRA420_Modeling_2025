@@ -46,6 +46,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Sequence, cast
 
+import _path_setup as path_setup
 import numpy as np
 import pandas as pd
 import yaml
@@ -68,7 +69,8 @@ from config_paths import (
 )
 from economic_module import EconomicInputs, SCCAggregation, SCCResult, compute_scc
 from economic_module.socioeconomics import DiceSocioeconomics
-from scripts._path_setup import ROOT
+
+ROOT = path_setup.ROOT
 
 
 def _discover_emission_scenarios(emission_root: Path, baseline_case: str) -> list[str]:
