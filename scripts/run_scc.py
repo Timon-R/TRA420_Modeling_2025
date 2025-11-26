@@ -68,11 +68,7 @@ from config_paths import (
 )
 from economic_module import EconomicInputs, SCCAggregation, SCCResult, compute_scc
 from economic_module.socioeconomics import DiceSocioeconomics
-
-ROOT = Path(__file__).resolve().parents[1]
-
-sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "scripts"))
+from scripts._path_setup import ROOT
 
 
 def _discover_emission_scenarios(emission_root: Path, baseline_case: str) -> list[str]:
