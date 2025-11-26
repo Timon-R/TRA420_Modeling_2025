@@ -301,6 +301,22 @@ def _override_forcing(model: FAIR, calibration: FairCalibration, scenario: str) 
         model.forcing.loc[{"scenario": scenario, "config": cfg, "specie": "Volcanic"}] = volcanic
 
 
+def _apply_forcing_scaling(model: FAIR, calibration: FairCalibration, scenario: str) -> None:
+    """Scale land-use and LAPSI forcing series when calibration provides factors."""
+
+    def _scale(specie: str, factor: float | None) -> None:
+        if factor is None:
+            return
+        try:
+            selection = {"scenario": scenario, "specie": specie}
+            model.forcing.loc[selection] = model.forcing.loc[selection] * float(factor)
+        except KeyError:  # specie absent in this configuration
+            return
+
+    _scale("Land use", calibration.landuse_scale)
+    _scale("Light absorbing particles on snow and ice", calibration.lapsi_scale)
+
+
 def apply_fair_calibration(model: FAIR, calibration: FairCalibration, scenario: str) -> None:
     """Apply calibration parameters and drivers to a FaIR model."""
 
@@ -309,3 +325,4 @@ def apply_fair_calibration(model: FAIR, calibration: FairCalibration, scenario: 
     _apply_ch4_lifetime(model, calibration)
     _override_historical_emissions(model, calibration, scenario)
     _override_forcing(model, calibration, scenario)
+    _apply_forcing_scaling(model, calibration, scenario)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import re
@@ -48,6 +49,7 @@ class SummarySettings:
     climate_output_directory: Path | None = None
     gdp_series: dict[str, dict[int, float]] | None = None
     population_series: dict[str, dict[int, float]] | None = None
+    socio_frames: dict[str, pd.DataFrame] | None = None
     per_country_emission_root: Path | None = None
     pattern_output_directory: Path | None = None
     pattern_countries: list[str] | None = None
@@ -333,16 +335,33 @@ def _collect_socio_series(
     climate_labels: Sequence[str],
     run_directory: str | None,
     plot_end: int,
-) -> tuple[dict[str, dict[int, float]] | None, dict[str, dict[int, float]] | None]:
+) -> tuple[
+    dict[str, dict[int, float]] | None,
+    dict[str, dict[int, float]] | None,
+    dict[str, pd.DataFrame] | None,
+]:
+    socio_cfg = config.get("socioeconomics", {}) or {}
+    conv_cfg = socio_cfg.get("currency_conversion", {}) if isinstance(socio_cfg, Mapping) else {}
+
+    def _currency_settings(key: str, default: float = 1.0) -> tuple[float, str]:
+        try:
+            value = float(conv_cfg.get(key, default))
+        except Exception:
+            value = float(default)
+        if math.isclose(value, 1.0, rel_tol=1e-9, abs_tol=1e-9):
+            return value, "USD_native"
+        match = re.search(r"to_(\d{4})", key)
+        if match:
+            return value, f"USD_{match.group(1)}"
+        digits = re.findall(r"(?:19|20|21)\d{2}", key)
+        if digits:
+            return value, f"USD_{digits[-1]}"
+        return value, "USD_converted"
+
+    dice_conversion, dice_currency_label = _currency_settings("usd_2017_to_2025", 1.0)
     economic_cfg = config.get("economic_module", {}) or {}
     socio_cfg = config.get("socioeconomics", {}) or {}
-    scenario_list = list(scenario_labels)
-    if not scenario_list:
-        fallback_climates = sorted({label for label in climate_labels if label})
-        if fallback_climates:
-            scenario_list = [f"socio_{label}" for label in fallback_climates]
-        else:
-            scenario_list = ["socio_default"]
+    scenario_list = [f"socio_{label}" for label in scenario_labels if label] or ["socio_default"]
 
     gdp_series_path = _resolve_path(root, economic_cfg.get("gdp_series"), run_directory)
     gdp_population_dir = economic_cfg.get("gdp_population_directory")
@@ -353,6 +372,7 @@ def _collect_socio_series(
 
     gdp_map: dict[str, dict[int, float]] = {}
     pop_map: dict[str, dict[int, float]] = {}
+    socio_frames: dict[str, pd.DataFrame] = {}
 
     try:
         if gdp_series_path and gdp_series_path.exists():
@@ -379,26 +399,35 @@ def _collect_socio_series(
                 gdp_map[scenario] = dict(gdp_base)
                 if pop_base is not None:
                     pop_map[scenario] = dict(pop_base)
+                socio_frame = frame[["year", "gdp_trillion_usd"]].copy()
+                if pop_base is not None:
+                    socio_frame["population_million"] = frame["population_million"].astype(float)
+                socio_frame.attrs["currency_label"] = "USD_native"
+                socio_frames[scenario] = socio_frame
             _extend_socio_maps(gdp_map, pop_map, plot_end)
-            return gdp_map or None, pop_map or None
+            return gdp_map or None, pop_map or None, socio_frames or None
 
         socio_mode = str(socio_cfg.get("mode", "")).strip().lower()
         if socio_mode == "dice":
             dice_cfg = socio_cfg.get("dice", {}) or {}
             for scenario in scenario_list:
                 climate_label = _scenario_climate_label(scenario, climate_labels)
-                gdp_series, population_series = _project_dice_series(
+                gdp_series, population_series, socio_frame = _project_dice_series(
                     root,
                     dice_cfg,
                     climate_label,
                     plot_end,
+                    currency_conversion=dice_conversion,
+                    currency_label=dice_currency_label,
                 )
                 if gdp_series:
                     gdp_map[scenario] = gdp_series
                 if population_series:
                     pop_map[scenario] = population_series
+                if socio_frame is not None:
+                    socio_frames[scenario] = socio_frame
             _extend_socio_maps(gdp_map, pop_map, plot_end)
-            return gdp_map or None, pop_map or None
+            return gdp_map or None, pop_map or None, socio_frames or None
 
         for scenario in scenario_list:
             climate_label = _scenario_climate_label(scenario, climate_labels)
@@ -412,12 +441,24 @@ def _collect_socio_series(
                     int(year): float(value)
                     for year, value in population_series.sort_index().items()
                 }
+            frame = pd.DataFrame(
+                {
+                    "year": gdp_series.index.astype(int),
+                    "gdp_trillion_usd": gdp_series.values.astype(float),
+                }
+            )
+            if population_series is not None:
+                frame["population_million"] = (
+                    population_series.reindex(gdp_series.index).astype(float).values
+                )
+            frame.attrs["currency_label"] = "USD_native"
+            socio_frames[scenario] = frame
     except Exception as exc:  # pragma: no cover - defensive
         LOGGER.warning("Unable to load socioeconomics series: %s", exc)
-        return None, None
+        return None, None, None
 
     _extend_socio_maps(gdp_map, pop_map, plot_end)
-    return gdp_map or None, pop_map or None
+    return gdp_map or None, pop_map or None, socio_frames or None
 
 
 def _extend_socio_maps(
@@ -475,7 +516,10 @@ def _project_dice_series(
     dice_cfg: Mapping[str, object],
     climate_label: str | None,
     end_year: int,
-) -> tuple[dict[int, float] | None, dict[int, float] | None]:
+    *,
+    currency_conversion: float = 1.0,
+    currency_label: str = "USD_native",
+) -> tuple[dict[int, float] | None, dict[int, float] | None, pd.DataFrame]:
     cfg = dict(dice_cfg)
     scenario_setting = str(cfg.get("scenario", "SSP2")).strip()
     if scenario_setting.lower() == "as_climate_scenario":
@@ -484,7 +528,8 @@ def _project_dice_series(
         resolved = scenario_setting.upper()
     cfg["scenario"] = resolved
     model = DiceSocioeconomics.from_config(cfg, base_path=root)
-    frame = model.project(int(end_year))
+    frame = model.project(int(end_year), currency_conversion=currency_conversion)
+    frame.attrs["currency_label"] = currency_label
     gdp_series = {
         int(year): float(value)
         for year, value in frame.set_index("year")["gdp_trillion_usd"].astype(float).items()
@@ -493,7 +538,7 @@ def _project_dice_series(
         int(year): float(value)
         for year, value in frame.set_index("year")["population_million"].astype(float).items()
     }
-    return gdp_series, population_series
+    return gdp_series, population_series, frame
 
 
 def _read_series(
@@ -1191,10 +1236,10 @@ def build_summary(
                 temperature_timeseries=temperature_series,
             )
 
-    gdp_series_map, population_series_map = _collect_socio_series(
+    gdp_series_map, population_series_map, socio_frame_map = _collect_socio_series(
         root,
         config,
-        metrics_map.keys(),
+        climate_labels_str,
         climate_labels_str,
         run_directory,
         plot_end,
@@ -1233,6 +1278,7 @@ def build_summary(
         climate_output_directory=temperature_root,
         gdp_series=gdp_series_map,
         population_series=population_series_map,
+        socio_frames=socio_frame_map,
         pattern_output_directory=pattern_output_directory,
         pattern_countries=pattern_countries,
         year_periods=year_periods,
@@ -1904,6 +1950,42 @@ def write_plots(
     )
 
 
+def write_socioeconomic_tables(settings: SummarySettings) -> list[Path]:
+    """Write detailed socioeconomic projections per climate/scenario."""
+    outputs: list[Path] = []
+    output_dir = settings.scc_output_directory or settings.output_directory
+    if settings.socio_frames is None:
+        return outputs
+
+    for label, frame in settings.socio_frames.items():
+        if frame is None or frame.empty:
+            continue
+        safe_label = _safe_name(label)
+        path = output_dir / f"socioeconomics_{safe_label}.csv"
+        currency_label = frame.attrs.get("currency_label", f"USD_{settings.base_year}")
+        socio_frame = frame.copy()
+        socio_frame.attrs["currency_label"] = currency_label
+        rename_map = {
+            "gdp_trillion_usd": f"gdp_trillion_usd_{currency_label}",
+            "gdp_per_capita_usd": f"gdp_per_capita_usd_{currency_label}",
+            "consumption_trillion_usd": f"consumption_trillion_usd_{currency_label}",
+            "consumption_per_capita_usd": f"consumption_per_capita_usd_{currency_label}",
+        }
+        socio_frame = socio_frame.rename(
+            columns={k: v for k, v in rename_map.items() if k in socio_frame.columns}
+        )
+        try:
+            socio_frame.to_csv(path, index=False)
+        except Exception:
+            continue
+        outputs.append(path)
+
+    for old_name in ("socioeconomics_gdp.csv", "socioeconomics_population.csv"):
+        with contextlib.suppress(Exception):
+            (output_dir / old_name).unlink(missing_ok=True)
+    return outputs
+
+
 def _include_background_plots(settings: SummarySettings, plots_dir: Path) -> None:
     climate_dir = settings.climate_output_directory
     if climate_dir is None:
@@ -1988,6 +2070,7 @@ def _plot_damage_function(settings: SummarySettings) -> None:
 
     cfg_copy = dict(cfg)
     max_temp = float(cfg_copy.pop("plot_max_temperature", 8.0) or 8.0)
+    cfg_copy.pop("mode", None)
     max_temp = max(1.0, max_temp)
     temps = np.linspace(0.0, max_temp, 400)
     try:

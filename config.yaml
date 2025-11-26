@@ -1,5 +1,5 @@
 run:
-  mode: scenarios  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
   output_subdir: test  # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
@@ -141,8 +141,8 @@ socioeconomics:
       initial_stock_trillions: null  # Initial capital stock (trillion USD); null solves from steady state.
     capital_share: 0.36507  # Labour-share complement (α) in the Cobb–Douglas production function.
   currency_conversion:
-    usd_2017_to_2025: 1.28  # PPP GDP deflator to convert 2017 USD to 2025 USD (BEA GDPDEF).
-    usd_2023_to_2025: 1.05  # PPP GDP deflator to convert 2023 USD to 2025 USD (BEA GDPDEF).
+    usd_2017_to_2025: 1 #1.28  # PPP GDP deflator to convert 2017 USD to 2025 USD (BEA GDPDEF).
+    usd_2023_to_2025: 1 #1.05  # PPP GDP deflator to convert 2023 USD to 2025 USD (BEA GDPDEF).
 
 economic_module:
   output_directory: results/economic  # Folder for SCC/damage CSV outputs (prefixed by results.run_directory).
@@ -157,9 +157,6 @@ economic_module:
     emission_root: results/emissions/All_countries  # Aggregated emissions root produced by calc_emissions.
     temperature_root: results/climate  # Directory hosting temperature CSVs named <scenario>_<ssp>.csv.
   reference_scenario: base_mix__base_demand  # Baseline scenario for SCC calculations.
-  evaluation_scenarios:
-    - base_mix__scen1_lower
-    - base_mix__scen1_upper
   base_year: 2025  # Discounting/SCC base year; must match time_horizon.start.
   damage_duration_years: 450  # Length of SCC window when extending beyond the reporting horizon.
   aggregation: per_year  # SCC aggregation style: 'per_year' exports SCC(τ); 'average' collapses to a scalar.
