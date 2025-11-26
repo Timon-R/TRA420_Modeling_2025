@@ -63,7 +63,8 @@ climate_module:
   climate_scenarios:
     run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
       - ssp245
-      #- ssp370  
+      - ssp370  
+      - ssp585
     definitions:
       - id: ssp119
         label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
