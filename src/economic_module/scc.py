@@ -532,17 +532,19 @@ def damage_dice(
 
     The baseline follows ``delta1 * T + delta2 * T^2`` unless ``custom_terms`` is
     supplied, in which case damage is computed as ``Σ coeff_i × T^{power_i}``.
-    Optional extensions:
+    Optional extensions are applied in the following order:
 
-    - ``use_threshold`` scales damages once temperature exceeds
-      ``threshold_temperature`` (power-law amplification).
-    - ``use_saturation`` keeps damages below ``max_fraction`` via a rational
-      curve (default) or a hard clamp.
-    - ``use_catastrophic`` adds disaster losses when temperatures cross
-      ``catastrophic_temperature`` either step-wise or probabilistically.
+    1. Threshold amplification above ``threshold_temperature``.
+    2. Catastrophic add-ons once temperatures cross ``catastrophic_temperature``.
+    3. A single saturation step (when enabled) that caps the combined damages
+       via either a smooth rational curve or a hard clamp.
+
+    The final result is always clipped to ``[0, max_fraction]`` for numerical safety.
     """
 
     temperatures = np.asarray(temp, dtype=float)
+
+    # 1. Base polynomial damages (DICE-style or custom coefficients)
     if custom_terms:
         damage = np.zeros_like(temperatures, dtype=float)
         for term in custom_terms:
@@ -554,6 +556,7 @@ def damage_dice(
     else:
         damage = delta1 * temperatures + delta2 * temperatures**2
 
+    # 2. Threshold amplification
     if use_threshold:
         amplify = (
             1.0
@@ -562,22 +565,7 @@ def damage_dice(
         )
         damage = damage * amplify
 
-    if use_saturation:
-        positive = np.maximum(0.0, damage)
-        if saturation_mode == "rational":
-            with np.errstate(divide="ignore", invalid="ignore"):
-                scaled = np.divide(
-                    positive,
-                    1.0 + positive,
-                    out=np.zeros_like(positive),
-                    where=positive >= 0.0,
-                )
-            damage = max_fraction * scaled
-        elif saturation_mode == "clamp":
-            damage = np.clip(damage, 0.0, max_fraction)
-        else:
-            raise ValueError("saturation_mode must be 'rational' or 'clamp'")
-
+    # 3. Catastrophic / disaster component
     if use_catastrophic:
         if disaster_mode == "step":
             extra = np.where(temperatures >= catastrophic_temperature, disaster_fraction, 0.0)
@@ -588,8 +576,28 @@ def damage_dice(
             raise ValueError("disaster_mode must be 'prob' or 'step'")
         damage = damage + extra
 
-    # Always cap to max_fraction to avoid >100% GDP losses.
-    damage = np.minimum(damage, max_fraction)
+    # Ensure non-negative before saturation
+    damage = np.maximum(damage, 0.0)
+
+    # 4. Saturation (applies to base + threshold + catastrophe)
+    if use_saturation:
+        if saturation_mode == "rational":
+            # Smooth cap: ~linear for small damages, approaches max_fraction for large damages.
+            x = damage
+            with np.errstate(divide="ignore", invalid="ignore"):
+                damage = np.divide(
+                    max_fraction * x,
+                    x + max_fraction,
+                    out=np.zeros_like(x),
+                    where=x >= 0.0,
+                )
+        elif saturation_mode == "clamp":
+            damage = np.clip(damage, 0.0, max_fraction)
+        else:
+            raise ValueError("saturation_mode must be 'rational' or 'clamp'")
+
+    # Final numeric safety: keep within [0, max_fraction].
+    damage = np.clip(damage, 0.0, max_fraction)
     return damage
 
 
