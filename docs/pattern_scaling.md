@@ -52,6 +52,8 @@ Each output file is named `<ISO3>_<original_filename>.csv` and stores:
 - `year`
 - `temperature_baseline` (scaled)
 - `temperature_adjusted` (scaled)
+- `precipitation_baseline` (scaled)
+- `precipitation_adjusted` (scaled)
 - `temperature_delta` (scaled difference)
 - `climate_scenario`
 - `iso3` (country code)
@@ -82,4 +84,4 @@ The script loads `config.yaml`, computes scaling factors based on the selected
 weighting and countries, and writes scaled CSVs to `pattern_scaling.output_directory`.
 
 ## References
-- [CMIP6 pattern scaling factors]:
+US EPA. Pattern Scaling of Global Climate Variables. 2023. (https://www.github.com/USEPA/pattern-scaled-climate-variables)
