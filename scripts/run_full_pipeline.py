@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
-import math
 import os
 import re
 import sys
@@ -183,71 +182,6 @@ def _apply_run_directory(config: MutableMapping[str, object], run_directory: str
     results_cfg = config.setdefault("results", {})
     if isinstance(results_cfg, MutableMapping):
         results_cfg["run_directory"] = run_directory
-
-
-def _rewrite_prefixed_paths(obj: object, prefix: str, run_dir: str) -> object:
-    prefix_norm = prefix.strip().rstrip("/")
-    if not prefix_norm:
-        return obj
-    root_prefix = f"{prefix_norm}/"
-
-    def _rewrite(value: object) -> object:
-        if isinstance(value, str) and value.startswith(root_prefix):
-            remainder = value[len(root_prefix) :].lstrip("/")
-            new_path = (Path(prefix_norm) / run_dir / Path(remainder)).as_posix()
-            return new_path
-        return value
-
-    if isinstance(obj, MutableMapping):
-        for key, val in list(obj.items()):
-            obj[key] = _rewrite_prefixed_paths(val, prefix, run_dir)
-        return obj
-    if isinstance(obj, list):
-        return [_rewrite_prefixed_paths(item, prefix, run_dir) for item in obj]
-    if isinstance(obj, tuple):
-        return tuple(_rewrite_prefixed_paths(item, prefix, run_dir) for item in obj)
-    return _rewrite(obj)
-
-
-def _split_climate_label(label: str) -> tuple[str, str | None]:
-    match = _CLIMATE_SUFFIX_PATTERN.search(label)
-    if not match:
-        return label, None
-    base = label[: match.start()].rstrip("_") or label
-    return base, match.group(1)
-
-
-def _value_for_year(data: object | None, year: int) -> float:
-    if not isinstance(data, Mapping):
-        return math.nan
-    key_candidates = [str(year), year]
-    for key in key_candidates:
-        if key in data:
-            try:
-                return float(data[key])
-            except (TypeError, ValueError):
-                return math.nan
-    return math.nan
-
-
-def _infer_metric_years(metrics: Mapping[str, object]) -> list[int]:
-    keys: set[int] = set()
-    for metric_key in (
-        "emission_delta_mt",
-        "temperature_delta_c",
-        "mortality_delta",
-        "mortality_value_delta",
-    ):
-        series = metrics.get(metric_key)
-        if not isinstance(series, Mapping):
-            continue
-        for candidate in series:
-            try:
-                value = int(float(str(candidate)))
-            except (TypeError, ValueError):
-                continue
-            keys.add(value)
-    return sorted(keys)
 
 
 @contextmanager

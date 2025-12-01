@@ -46,20 +46,24 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Sequence, cast
 
-import _path_setup as path_setup
-import numpy as np
-import pandas as pd
-import yaml
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
-from calc_emissions import BASE_DEMAND_CASE
-from calc_emissions.scenario_io import (
+import _path_setup as path_setup  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import yaml  # noqa: E402
+
+from calc_emissions import BASE_DEMAND_CASE  # noqa: E402
+from calc_emissions.scenario_io import (  # noqa: E402
     load_scenario_absolute,
     load_scenario_delta,
     split_scenario_name,
 )
-from climate_module import ScenarioSpec, run_scenarios
-from climate_module.calibration import load_fair_calibration
-from config_paths import (
+from climate_module import ScenarioSpec, run_scenarios  # noqa: E402
+from climate_module.calibration import load_fair_calibration  # noqa: E402
+from config_paths import (  # noqa: E402
     apply_results_run_directory,
     get_config_path,
     get_results_run_directory,
@@ -67,8 +71,13 @@ from config_paths import (
     sanitize_run_directory,
     set_config_root,
 )
-from economic_module import EconomicInputs, SCCAggregation, SCCResult, compute_scc
-from economic_module.socioeconomics import DiceSocioeconomics
+from economic_module import (  # noqa: E402
+    EconomicInputs,
+    SCCAggregation,
+    SCCResult,
+    compute_scc,
+)
+from economic_module.socioeconomics import DiceSocioeconomics  # noqa: E402
 
 ROOT = path_setup.ROOT
 

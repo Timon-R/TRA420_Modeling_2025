@@ -29,10 +29,23 @@ def temp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     )
     scaling_df.to_csv(scaling_file, index=False)
 
+    precip_file = tmp_path / "data" / "precip_scaling.csv"
+    precip_df = pd.DataFrame(
+        {
+            "name": ["United States"],
+            "iso3": ["USA"],
+            "continent": ["North America"],
+            "scenario": ["ssp2"],
+            "patterns.area": [2.5],
+        }
+    )
+    precip_df.to_csv(precip_file, index=False)
+
     config = {
         "pattern_scaling": {
             "output_directory": "results/climate_scaled",
             "scaling_factors_file": "data/scaling.csv",
+            "scaling_factors_file_precipitation": "data/precip_scaling.csv",
             "scaling_weighting": "area",
             "countries": ["USA"],
         },
@@ -52,6 +65,7 @@ def test_get_scaling_factors_filters_to_countries_and_scenarios(temp_config: dic
     assert len(factors) == 1
     assert factors.iloc[0]["iso3"] == "USA"
     assert np.isclose(factors.iloc[0]["scaling_factor"], 1.5)
+    assert np.isclose(factors.iloc[0]["precipitation_scaling_factor"], 2.5)
 
 
 def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -72,8 +86,9 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
     climate_file = climate_dir / "policy_ssp245.csv"
     climate_df.to_csv(climate_file, index=False)
 
-    scaling_file = tmp_path / "data" / "scaling.csv"
-    scaling_file.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    scaling_file = data_dir / "scaling.csv"
     pd.DataFrame(
         {
             "name": ["United States"],
@@ -83,11 +98,22 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
             "patterns.area": [2.0],
         }
     ).to_csv(scaling_file, index=False)
+    precip_file = data_dir / "precip_scaling.csv"
+    pd.DataFrame(
+        {
+            "name": ["United States"],
+            "iso3": ["USA"],
+            "continent": ["North America"],
+            "scenario": ["ssp2"],
+            "patterns.area": [4.0],
+        }
+    ).to_csv(precip_file, index=False)
 
     config = {
         "pattern_scaling": {
             "output_directory": "results/climate_scaled",
             "scaling_factors_file": "data/scaling.csv",
+            "scaling_factors_file_precipitation": "data/precip_scaling.csv",
             "scaling_weighting": "area",
             "countries": ["USA"],
         },
@@ -107,4 +133,7 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
     out = pd.read_csv(output_path)
     np.testing.assert_allclose(out["temperature_baseline"], [2.0, 3.0])
     np.testing.assert_allclose(out["temperature_delta"], [0.4, 0.6])
+    np.testing.assert_allclose(out["precipitation_baseline"], [4.0, 6.0])
+    np.testing.assert_allclose(out["precipitation_adjusted"], [4.8, 7.2])
+    np.testing.assert_allclose(out["precipitation_delta"], [0.8, 1.2])
     assert (out["iso3"] == "USA").all()

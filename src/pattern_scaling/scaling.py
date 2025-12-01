@@ -178,10 +178,15 @@ def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None
                 scaled["temperature_adjusted"] - scaled["temperature_baseline"]
             )
 
-            if "precipitation_scaling_factor" in row.columns:
+            if "precipitation_scaling_factor" in row.columns and pd.notna(
+                row.iloc[0]["precipitation_scaling_factor"]
+            ):
                 precip_factor = float(row.iloc[0]["precipitation_scaling_factor"])
                 scaled["precipitation_baseline"] = frame["temperature_baseline"] * precip_factor
                 scaled["precipitation_adjusted"] = frame["temperature_adjusted"] * precip_factor
+                scaled["precipitation_delta"] = (
+                    scaled["precipitation_adjusted"] - scaled["precipitation_baseline"]
+                )
 
             if "climate_scenario" in frame.columns:
                 scaled["climate_scenario"] = frame["climate_scenario"]
