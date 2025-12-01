@@ -1,6 +1,6 @@
 run:
-  mode: scenarios  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
-  output_subdir:   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
+  mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  output_subdir: test   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
 time_horizon:
@@ -64,7 +64,7 @@ climate_module:
     run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
       - ssp245
       - ssp370  
-      - ssp585
+      # - ssp585
     definitions:
       - id: ssp119
         label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
@@ -135,8 +135,8 @@ socioeconomics:
 
 pattern_scaling:
   output_directory: results/climate_scaled
-  scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv
-  scaling_factors_file_precipitation: data/pattern_scaling_precipitation_by_country_mean.csv
+  scaling_factors_file: data/pattern_scaling/cmip6_pattern_scaling_by_country_mean.csv
+  scaling_factors_file_precipitation: data/pattern_scaling/pattern_scaling_precipitation_by_country_mean.csv
   # Columns: name, iso3, continent, scenario, patterns.* where * indicates how the pattern scaling is weighted
   scaling_weighting: area  # Options: gdp.2000, gdp.2100, pop.2000, pop.2100, area (default)
   countries: # List of ISO3 codes
@@ -146,6 +146,7 @@ pattern_scaling:
     - KOS # Kosovo, unofficially assigned ISO3 code
     - SRB
     - MNE
+
 economic_module:
   output_directory: results/economic  # Folder for SCC/damage CSV outputs (prefixed by results.run_directory).
   write_damages: true  # Toggle emission-scenario damage exports; set false for SCC-only workflows.

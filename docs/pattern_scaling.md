@@ -6,7 +6,7 @@ module into country-level trajectories by applying pre-computed scaling factors.
 ## Inputs
 
 - **Scaling factors CSV** (`pattern_scaling.scaling_factors_file`):
-  A table such as `data/cmip6_pattern_scaling_by_country_mean.csv` with columns:
+  A table such as `data/pattern_scaling/cmip6_pattern_scaling_by_country_mean.csv` with columns:
   - `name` – descriptive country name.
   - `iso3` – ISO3 country code.
   - `scenario` – SSP/RCP identifier (first four characters, e.g., `ssp2`).
@@ -23,7 +23,7 @@ module into country-level trajectories by applying pre-computed scaling factors.
 ```yaml
 pattern_scaling:
   output_directory: results/climate_scaled
-  scaling_factors_file: data/cmip6_pattern_scaling_by_country_mean.csv
+  scaling_factors_file: data/pattern_scaling/cmip6_pattern_scaling_by_country_mean.csv
   scaling_weighting: area            # controls which patterns.<*> column to use
   countries: [USA, GBR, DEU]         # ISO3 codes to process
 

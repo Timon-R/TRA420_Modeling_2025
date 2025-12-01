@@ -2,83 +2,194 @@
 
 from __future__ import annotations
 
-from os import listdir
 from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
 import yaml
 
-DEFAULT_ROOT = Path(__file__).parent.parent.parent
+from config_paths import (
+    apply_results_run_directory,
+    get_config_path,
+    get_results_run_directory,
+)
+
+DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = DEFAULT_ROOT / "config.yaml"
 
 
+def _config_value(config: Dict[str, Any], *keys: str, required: bool = True) -> Any:
+    current: Any = config
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            if required:
+                path = ".".join(keys)
+                raise KeyError(f"Missing configuration key '{path}'.")
+            return None
+        current = current[key]
+    return current
+
+
 def load_config(config_path: str | Path | None = None) -> Dict[str, Any]:
-    """Load YAML config into a dict."""
-    config_file = Path(config_path).expanduser().resolve()
-    if not config_file.is_file():
-        raise FileNotFoundError(f"Config file not found: {config_file}")
-    with config_file.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    """Load ``config.yaml`` (defaults to the repository root copy)."""
+
+    path = Path(config_path) if config_path is not None else get_config_path(DEFAULT_CONFIG_PATH)
+    path = path.expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def _resolve_path(path_like: str | Path) -> Path:
+    path = Path(path_like)
+    if not path.is_absolute():
+        path = DEFAULT_ROOT / path
+    return path
 
 
 def get_scaling_factors(config: Dict[str, Any]) -> pd.DataFrame:
-    ps_df = pd.read_csv(DEFAULT_ROOT / config["pattern_scaling"].get("scaling_factors_file"))
-    ps_df_precip = pd.read_csv(DEFAULT_ROOT / config["pattern_scaling"].get("scaling_factors_file_precipitation"))
-    """Perform pattern scaling based on the provided configuration."""
-    countries = config["pattern_scaling"].get("countries")
-    # In the pattern scaling csv, scenarios are defined without rc
-    scenarios = [
-        s["id"][0:4] for s in config["climate_module"]["climate_scenarios"].get("definitions")
-    ]
-    weighting = f"patterns.{config["pattern_scaling"].get("scaling_weighting")}"
-    sf = ps_df[(ps_df["iso3"].isin(countries)) & (ps_df["scenario"].isin(scenarios))]
-    sf = sf[["name", "iso3", "scenario", weighting]]
-    sf_precip = ps_df_precip[(ps_df_precip["iso3"].isin(countries)) & (ps_df_precip["scenario"].isin(scenarios))]
-    sf_precip = (sf_precip[["name", "iso3", "scenario", weighting]]
-                        .rename({weighting: f"precipitation.{weighting}"}, axis=1))[[f"precipitation.{weighting}"]]
-    sf = pd.concat([sf, sf_precip], axis=1, sort=False)
-    return sf
+    """Load and filter pattern-scaling factors based on configuration."""
+
+    ps_cfg = _config_value(config, "pattern_scaling")
+    cm_cfg = _config_value(config, "climate_module")
+
+    scaling_file = _resolve_path(ps_cfg.get("scaling_factors_file"))
+    if not scaling_file.exists():
+        raise FileNotFoundError(f"Scaling factors file not found: {scaling_file}")
+
+    weighting_key = ps_cfg.get("scaling_weighting", "area")
+    weighting_column = f"patterns.{weighting_key}"
+
+    ps_df = pd.read_csv(scaling_file)
+    if weighting_column not in ps_df.columns:
+        raise ValueError(
+            f"Column '{weighting_column}' not found in scaling factors file '{scaling_file}'."
+        )
+
+    countries = ps_cfg.get("countries", [])
+    if not countries:
+        raise ValueError("'pattern_scaling.countries' must list at least one ISO3 code.")
+
+    definitions = _config_value(cm_cfg, "climate_scenarios", "definitions")
+    scenario_prefixes = {str(entry["id"]).lower()[:4] for entry in definitions if "id" in entry}
+    if not scenario_prefixes:
+        raise ValueError("No climate scenarios found in configuration definitions.")
+
+    base_filtered = ps_df[
+        (ps_df["iso3"].isin(countries)) & (ps_df["scenario"].str.lower().isin(scenario_prefixes))
+    ][["name", "iso3", "scenario", weighting_column]].copy()
+    base_filtered.rename(columns={weighting_column: "scaling_factor"}, inplace=True)
+
+    precip_file = ps_cfg.get("scaling_factors_file_precipitation")
+    if precip_file:
+        precip_path = _resolve_path(precip_file)
+        if not precip_path.exists():
+            raise FileNotFoundError(f"Precipitation scaling factors file not found: {precip_path}")
+        ps_precip_df = pd.read_csv(precip_path)
+        if weighting_column not in ps_precip_df.columns:
+            raise ValueError(
+                f"Column '{weighting_column}' not found in precipitation scaling file "
+                f"'{precip_path}'."
+            )
+        precip_filtered = ps_precip_df[
+            (ps_precip_df["iso3"].isin(countries))
+            & (ps_precip_df["scenario"].str.lower().isin(scenario_prefixes))
+        ][["iso3", "scenario", weighting_column]].copy()
+        precip_filtered.rename(
+            columns={weighting_column: "precipitation_scaling_factor"},
+            inplace=True,
+        )
+        filtered = base_filtered.merge(
+            precip_filtered,
+            on=["iso3", "scenario"],
+            how="left",
+        )
+    else:
+        filtered = base_filtered
+
+    return filtered
+
+
+def _detect_scenario_prefix(
+    frame: pd.DataFrame, scenario_prefixes: set[str], filename: str
+) -> str | None:
+    if "climate_scenario" in frame.columns:
+        values = frame["climate_scenario"].dropna().astype(str).str.lower().unique()
+        if values.size:
+            return values[0][:4]
+    filename_lower = filename.lower()
+    for prefix in scenario_prefixes:
+        if prefix in filename_lower:
+            return prefix
+    return None
+
 
 def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None:
-    """Apply scaling factors to climate results."""
-    results = listdir(DEFAULT_ROOT / config["climate_module"].get("output_directory"))
-    scenarios = [
-        s["id"][0:4] for s in config["climate_module"]["climate_scenarios"].get("definitions")
-    ]
-    weighting = f"patterns.{config["pattern_scaling"].get("scaling_weighting")}"
-    output_dir = DEFAULT_ROOT / config["pattern_scaling"].get("output_directory")
-    countries = config["pattern_scaling"].get("countries")
-    for result in results:
-        if result.endswith(".csv"):
-            df = pd.read_csv(
-                DEFAULT_ROOT / config["climate_module"].get("output_directory") / result
+    """Apply pattern-scaling factors to climate-module temperature results."""
+
+    ps_cfg = _config_value(config, "pattern_scaling")
+    cm_cfg = _config_value(config, "climate_module")
+    run_directory = get_results_run_directory(config)
+
+    climate_dir = _resolve_path(cm_cfg.get("output_directory", "results/climate"))
+    climate_dir = apply_results_run_directory(climate_dir, run_directory, repo_root=DEFAULT_ROOT)
+    if not climate_dir.exists():
+        raise FileNotFoundError(
+            f"Climate output directory '{climate_dir}' not found. Run the climate module first."
+        )
+
+    output_dir = _resolve_path(ps_cfg.get("output_directory", "results/climate_scaled"))
+    output_dir = apply_results_run_directory(output_dir, run_directory, repo_root=DEFAULT_ROOT)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    definitions = _config_value(cm_cfg, "climate_scenarios", "definitions")
+    scenario_prefixes = {str(entry["id"]).lower()[:4] for entry in definitions if "id" in entry}
+
+    countries = set(ps_cfg.get("countries", []))
+    if not countries:
+        raise ValueError("'pattern_scaling.countries' must list at least one ISO3 code.")
+
+    for climate_file in sorted(climate_dir.glob("*.csv")):
+        frame = pd.read_csv(climate_file)
+        if not {"temperature_baseline", "temperature_adjusted"}.issubset(frame.columns):
+            continue
+        scenario_prefix = _detect_scenario_prefix(frame, scenario_prefixes, climate_file.name)
+        if scenario_prefix is None:
+            continue
+
+        for country in countries:
+            row = scaling_factors[
+                (scaling_factors["scenario"].str.lower() == scenario_prefix)
+                & (scaling_factors["iso3"] == country)
+            ]
+            if row.empty:
+                continue
+
+            factor = float(row.iloc[0]["scaling_factor"])
+            scaled = pd.DataFrame(
+                {
+                    "year": frame["year"],
+                    "temperature_baseline": frame["temperature_baseline"] * factor,
+                    "temperature_adjusted": frame["temperature_adjusted"] * factor,
+                }
             )
-            for scenario in scenarios:
-                for country in countries:
-                    if scenario in result:
-                        sf = scaling_factors[
-                            (scaling_factors["scenario"] == scenario)
-                            & (scaling_factors["iso3"] == country)
-                        ][weighting].values[0]
-                        sf_precip = scaling_factors[
-                            (scaling_factors["scenario"] == scenario)
-                            & (scaling_factors["iso3"] == country)
-                            ][f"precipitation.{weighting}"].values[0]
-                        sdf = pd.concat(
-                            [
-                                df["year"],
-                                df["temperature_baseline"] * sf,
-                                df["temperature_adjusted"] * sf,
-                                df["temperature_adjusted"] * sf - df["temperature_baseline"] * sf,
-                                df["temperature_baseline"] * sf_precip,
-                                df["temperature_adjusted"] * sf_precip,
-                            ],
-                            axis=1,
-                        )
-                        sdf.columns.values[3:6] = ["temperature_delta", "precipitation_baseline", "precipitation_adjusted"]
-                        name = country + "_" + result
-                        sdf.to_csv(output_dir / name, index=False)
+            scaled["temperature_delta"] = (
+                scaled["temperature_adjusted"] - scaled["temperature_baseline"]
+            )
+
+            if "precipitation_scaling_factor" in row.columns:
+                precip_factor = float(row.iloc[0]["precipitation_scaling_factor"])
+                scaled["precipitation_baseline"] = frame["temperature_baseline"] * precip_factor
+                scaled["precipitation_adjusted"] = frame["temperature_adjusted"] * precip_factor
+
+            if "climate_scenario" in frame.columns:
+                scaled["climate_scenario"] = frame["climate_scenario"]
+            scaled["iso3"] = country
+            scaled["scaling_factor"] = factor
+
+            output_path = output_dir / f"{country}_{climate_file.name}"
+            scaled.to_csv(output_path, index=False)
 
 
 if __name__ == "__main__":
