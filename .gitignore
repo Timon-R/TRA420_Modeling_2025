@@ -2,3 +2,8 @@ results/
 __pycache__/
 .DS_Store
 TRA420_Modeling_2025.code-workspace
+src/tra420_modeling.egg-info/dependency_links.txt
+src/tra420_modeling.egg-info/PKG-INFO
+src/tra420_modeling.egg-info/requires.txt
+src/tra420_modeling.egg-info/SOURCES.txt
+src/tra420_modeling.egg-info/top_level.txt
