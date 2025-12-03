@@ -13,14 +13,14 @@ calc_emissions:
       description: Serbia upper bound (TWh).
       values:
         2025: 30.021
-        2027: 26.535266
-        2100: 26.535266
+        2027: 10.618
+        2100: 10.618
     scen1_lower:
       description: Serbia lower bound (TWh).
       values:
         2025: 30.021
-        2027: 27.927370
-        2100: 27.927370
+        2027: 12.010
+        2100: 12.010
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).

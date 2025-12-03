@@ -1,26 +1,26 @@
 calc_emissions:
-  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Serbia.csv
-  output_directory: results/emissions/Serbia
+  emission_factors_file: data/calc_emissions/emission_factors/emission_factors_Bosnia-Herzegovina.csv
+  output_directory: results/emissions/Bosnia-Herzegovina
   # Demand cases processed for every mix (must contain 'base_demand')
   demand_scenarios:
     base_demand:
-      description: Serbia base demand (was 'reference') (TWh).
+      description: Bosnia-Herzegovina base demand (was 'reference') (TWh).
       values:
-        2025: 30.021
-        2027: 30.021
-        2100: 30.021
+        2025: 10.355600
+        2027: 10.355600
+        2100: 10.355600
     scen1_upper:
-      description: Serbia upper bound (TWh).
+      description: Bosnia-Herzegovina upper bound (TWh).
       values:
-        2025: 30.021
-        2027: 26.535266
-        2100: 26.535266
+        2025: 10.355600
+        2027: 5.963888
+        2100: 5.963888
     scen1_lower:
-      description: Serbia lower bound (TWh).
+      description: Bosnia-Herzegovina lower bound (TWh).
       values:
-        2025: 30.021
-        2027: 27.927370
-        2100: 27.927370
+        2025: 10.355600
+        2027: 5.904654
+        2100: 5.904654
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).
@@ -39,15 +39,15 @@ calc_emissions:
     base_mix:
       description: Baseline mix (time-series CSV).
       type: timeseries
-      csv: country_data/electricity_mixes/electricity_mix_Serbia_reference.csv
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia-Herzegovina_reference.csv
     WEM:
       description: With existing measures (time-series CSV).
       type: timeseries
-      csv: country_data/electricity_mixes/electricity_mix_Serbia_WEM.csv
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia-Herzegovina_WEM.csv
     WAM:
       description: With additional measures (time-series CSV).
       type: timeseries
-      csv: country_data/electricity_mixes/electricity_mix_Serbia_WAM.csv
+      csv: country_data/electricity_mixes/electricity_mix_Bosnia-Herzegovina_WAM.csv
     # move mix_custom custom_example here so 'custom_example' mix is processed
     custom_example_mix:
       description: custom mix (copy from previous mix_custom)
@@ -58,5 +58,5 @@ calc_emissions:
         wind: 0.13
         solar: 0.10
 
-  # Move any custom_example entries into demand_scenarios/mix_scenarios to
-  # evaluate them as separate cases.
+  # Move any custom_example entries from `scenarios` into the two maps above
+  # if you want them processed as separate demand/mix cases.
