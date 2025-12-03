@@ -64,7 +64,7 @@ climate_module:
     run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
       - ssp245
       - ssp370  
-      # - ssp585
+      - ssp585
     definitions:
       - id: ssp119
         label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
@@ -194,8 +194,8 @@ economic_module:
     constant_discount:
       discount_rate: 0.03  # Fixed annual discount rate for constant_discount runs.
     ramsey_discount: #source: Nesje, F., Drupp, M. A., Freeman, M. C., & Groom, B. (2023). Philosophers and economists agree on climate policy paths but for different reasons. Nature Climate Change 2023 13:6, 13(6), 515–522. https://doi.org/10.1038/s41558-023-01681-w
-      rho: 0.00625  # Pure rate of time preference (ρ); average between philosopher/economist views.
-      eta: 1.125  # Elasticity of marginal utility of consumption (η) for Ramsey discounting.
+      rho: 0.005 # Pure rate of time preference (ρ); average economist view
+      eta: 1  # Elasticity of marginal utility of consumption (η) for Ramsey discounting.
 
 results:
   run_directory: null  # Optional top-level results/<run> directory (combined with run.output_subdir when provided).
