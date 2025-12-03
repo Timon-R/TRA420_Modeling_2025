@@ -5,8 +5,8 @@ philosopher_discount:
     methods:
       run: ramsey_discount
       ramsey_discount:
-        rho: 0.0075
-        eta: 1
+        rho: 0.00075
+        eta: 1.25
 
 damage_custom_poly_no_features:
   economic_module:
