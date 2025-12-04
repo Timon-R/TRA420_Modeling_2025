@@ -58,7 +58,7 @@ $$
     \end{cases}
 $$
 
-  where `Δ` is specified in Mt CO₂/yr and converted to Gt inside the runner.
+  where $\Delta E$ is specified in Mt CO₂/yr and converted to Gt inside the runner.
 
 - FaIR climate parameters are broadcast to `(config, layer)` matrices using
   `_broadcast_matrix` and `_broadcast_vector`.
