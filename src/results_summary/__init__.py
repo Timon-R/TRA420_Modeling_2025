@@ -29,6 +29,7 @@ from economic_module.socioeconomics import DiceSocioeconomics
 LOGGER = logging.getLogger("results.summary")
 
 AVAILABLE_METHODS: tuple[str, ...] = ("constant_discount", "ramsey_discount")
+MM_PER_DAY_TO_YEAR = 365.0
 
 
 @dataclass(slots=True)
@@ -60,6 +61,8 @@ class SummarySettings:
     air_pollution_countries: list[str] = field(default_factory=list)
     air_pollution_vsl: float | None = None
     damage_function_cfg: Mapping[str, object] | None = None
+    extreme_weather_costs_file: Path | None = None
+    aggregate_emission_root: Path | None = None
 
 
 @dataclass(slots=True)
@@ -1256,6 +1259,7 @@ def build_summary(
     pattern_cfg = config.get("local_climate_impacts", {}) if isinstance(config, Mapping) else {}
     pattern_output_directory: Path | None = None
     pattern_countries: list[str] | None = None
+    extreme_weather_file: Path | None = None
     if isinstance(pattern_cfg, Mapping):
         pattern_output = pattern_cfg.get("output_directory")
         if pattern_output:
@@ -1267,6 +1271,18 @@ def build_summary(
         countries_cfg = pattern_cfg.get("countries")
         if isinstance(countries_cfg, Iterable) and not isinstance(countries_cfg, (str, bytes)):
             pattern_countries = [str(c) for c in countries_cfg if c]
+        costs_setting = pattern_cfg.get("extreme_weather_costs_file")
+        if costs_setting:
+            candidate = Path(str(costs_setting))
+            if not candidate.is_absolute():
+                candidate = (root / candidate).resolve()
+            extreme_weather_file = candidate
+        else:
+            default_costs = (
+                root / "data" / "pattern_scaling" / "extreme_weather_costs.csv"
+            ).resolve()
+            if default_costs.exists():
+                extreme_weather_file = default_costs
 
     air_country_list = sorted(air_country_baseline.keys())
 
@@ -1302,6 +1318,8 @@ def build_summary(
             if isinstance(economic_cfg.get("damage_function"), Mapping)
             else economic_cfg.get("damage_function")
         ),
+        extreme_weather_costs_file=extreme_weather_file,
+        aggregate_emission_root=emission_root,
     )
     settings.per_country_emission_root = _default_per_country_root(config, root, run_directory)
 
@@ -1327,11 +1345,13 @@ def write_summary_csv(
     rows: list[dict[str, object]] = []
     per_country_root = settings.per_country_emission_root
     pattern_dir = settings.pattern_output_directory
-    pattern_countries = settings.pattern_countries or []
+    pattern_countries = [str(code).upper() for code in (settings.pattern_countries or [])]
     air_output_dir = settings.air_output_directory
     air_pollutants = settings.air_pollution_pollutants or []
     years_set = set(settings.years)
     cached_country_dirs: dict[str, list[Path]] = {}
+    pattern_cache: dict[tuple[str, str], dict[str, pd.DataFrame]] = {}
+    extreme_weather_costs = _load_extreme_weather_costs(settings.extreme_weather_costs_file)
 
     def _country_dirs(mix_case: str) -> list[Path]:
         if per_country_root is None:
@@ -1520,21 +1540,66 @@ def write_summary_csv(
                         row[f"air_pollution_monetary_benefit_{slug}_{year}"] = delta_value * vsl
 
         if pattern_dir is not None and climate_label:
+            scenario_key = (base_label, climate_label)
+            cache_entry = pattern_cache.setdefault(scenario_key, {})
+            scenario_prefix = climate_label.lower()[:4] if climate_label else None
+            aggregated_temp: dict[int, list[float]] = defaultdict(list)
+            aggregated_precip: dict[int, list[float]] = defaultdict(list)
+            aggregated_extreme: dict[int, list[float]] = defaultdict(list)
             for iso3 in pattern_countries:
-                pattern_file = pattern_dir / f"{iso3}_{base_label}_{climate_label}.csv"
-                if not pattern_file.exists():
-                    continue
-                try:
-                    pdf = pd.read_csv(pattern_file)
-                except Exception:
-                    continue
-                if "year" not in pdf.columns or "temperature_delta" not in pdf.columns:
+                pattern_df = cache_entry.get(iso3)
+                if pattern_df is None:
+                    pattern_file = pattern_dir / iso3 / f"{base_label}_{climate_label}.csv"
+                    if not pattern_file.exists():
+                        pattern_file = pattern_dir / f"{iso3}_{base_label}_{climate_label}.csv"
+                    if not pattern_file.exists():
+                        continue
+                    try:
+                        pattern_df = pd.read_csv(pattern_file)
+                    except Exception:
+                        continue
+                    cache_entry[iso3] = pattern_df
+                if "year" not in pattern_df.columns:
                     continue
                 for year in settings.years:
-                    match = pdf.loc[pdf["year"] == year, "temperature_delta"]
+                    match = pattern_df.loc[pattern_df["year"] == year]
                     if match.empty:
                         continue
-                    row[f"delta_T_{iso3}_{year}"] = float(match.iloc[0])
+                    if "temperature_delta" in match.columns:
+                        temp_val = float(match["temperature_delta"].iloc[0])
+                        row[f"delta_T_{iso3}_{year}"] = temp_val
+                        if math.isfinite(temp_val):
+                            aggregated_temp[year].append(temp_val)
+                    if "precipitation_delta_mm_per_day" in match.columns:
+                        precip_day = float(match["precipitation_delta_mm_per_day"].iloc[0])
+                        precip_year = precip_day * MM_PER_DAY_TO_YEAR
+                        row[f"local_climate_precipitation_delta_mm_per_year_{iso3}_{year}"] = (
+                            precip_year
+                        )
+                        if math.isfinite(precip_year):
+                            aggregated_precip[year].append(precip_year)
+                    damage_val = _lookup_extreme_weather(
+                        extreme_weather_costs, iso3, scenario_prefix, year
+                    )
+                    if damage_val is not None:
+                        row[f"extreme_weather_pct_gdp_{iso3}_{year}"] = damage_val
+                        if math.isfinite(damage_val):
+                            aggregated_extreme[year].append(damage_val)
+            for year, values in aggregated_temp.items():
+                if values:
+                    row[f"delta_T_local_climate_C_all_countries_{year}"] = float(
+                        sum(values) / len(values)
+                    )
+            for year, values in aggregated_precip.items():
+                if values:
+                    row[f"local_climate_precipitation_delta_mm_per_year_all_countries_{year}"] = (
+                        float(sum(values) / len(values))
+                    )
+            for year, values in aggregated_extreme.items():
+                if values:
+                    row[f"extreme_weather_pct_gdp_all_countries_{year}"] = float(
+                        sum(values) / len(values)
+                    )
 
         rows.append(row)
 
@@ -1544,6 +1609,9 @@ def write_summary_csv(
     for year in settings.years:
         ordered.append(f"delta_co2_Mt_all_countries_{year}")
         ordered.append(f"delta_T_C_{year}")
+        ordered.append(f"delta_T_local_climate_C_all_countries_{year}")
+        ordered.append(f"local_climate_precipitation_delta_mm_per_year_all_countries_{year}")
+        ordered.append(f"extreme_weather_pct_gdp_all_countries_{year}")
         for method in methods:
             ordered.append(f"SCC_{method}_{year}_PPP_USD_2025_discounted_to_year_per_tco2")
         for method in methods:
@@ -1564,6 +1632,11 @@ def write_summary_csv(
                 ordered.append(
                     f"air_pollution_concentration_delta_{pollutant}_{country}_microgram_per_m3_{year}"
                 )
+    for iso3 in pattern_countries:
+        for year in settings.years:
+            ordered.append(f"delta_T_{iso3}_{year}")
+            ordered.append(f"local_climate_precipitation_delta_mm_per_year_{iso3}_{year}")
+            ordered.append(f"extreme_weather_pct_gdp_{iso3}_{year}")
     if metrics_map:
         sample_metrics = next(iter(metrics_map.values()))
         for label in sample_metrics.mortality_sum:
@@ -1592,6 +1665,102 @@ def _pivot_metric(metrics_map: Mapping[str, ScenarioMetrics], attr: str, method:
             metric_value = metric_value.get(method, {})
         data[scenario] = metric_value
     return data
+
+
+def _load_extreme_weather_costs(
+    path: Path | None,
+) -> dict[tuple[str, str], dict[int, float]]:
+    if path is None:
+        return {}
+    path = Path(path)
+    if not path.exists():
+        LOGGER.debug("Extreme-weather costs file not found: %s", path)
+        return {}
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        LOGGER.warning("Unable to read extreme-weather costs file at %s", path, exc_info=True)
+        return {}
+    normalized = {str(col).strip().lower(): col for col in frame.columns}
+    country_col = normalized.get("country")
+    scenario_col = normalized.get("scenario")
+    if not country_col or not scenario_col:
+        LOGGER.warning(
+            "Extreme-weather costs file %s missing required 'Country'/'Scenario' columns",
+            path,
+        )
+        return {}
+    year_columns = [col for col in frame.columns if str(col).strip().lower().endswith("_pct_gdp")]
+    if not year_columns:
+        LOGGER.warning("Extreme-weather costs file %s missing '*_pct_gdp' year columns", path)
+        return {}
+    results: dict[tuple[str, str], dict[int, float]] = {}
+    for _, entry in frame.iterrows():
+        iso3 = str(entry.get(country_col, "")).strip().upper()
+        scenario = str(entry.get(scenario_col, "")).strip().lower()
+        if not iso3 or not scenario:
+            continue
+        key = (iso3, scenario)
+        per_year = results.setdefault(key, {})
+        for column in year_columns:
+            try:
+                year = int(str(column).split("_")[0])
+                value = float(entry[column])
+            except (ValueError, TypeError, KeyError):
+                continue
+            per_year[year] = value
+    return results
+
+
+def _lookup_extreme_weather(
+    costs: Mapping[tuple[str, str], Mapping[int, float]],
+    iso3: str,
+    scenario_prefix: str | None,
+    year: int,
+) -> float | None:
+    if not scenario_prefix:
+        return None
+
+    iso_key = iso3.upper()
+    scenario_key = scenario_prefix.lower()
+
+    def _value(prefix: str) -> float | None:
+        per_year = costs.get((iso_key, prefix))
+        if not per_year:
+            return None
+        value = per_year.get(year)
+        return None if value is None else float(value)
+
+    direct = _value(scenario_key)
+    if direct is not None:
+        return direct
+
+    iso_scenarios = {scenario for country, scenario in costs if country == iso_key}
+    if not iso_scenarios:
+        return None
+
+    target = _scenario_numeric_value(scenario_key)
+    if target is None:
+        return None
+
+    fallback = min(
+        iso_scenarios,
+        key=lambda candidate: (
+            abs((_scenario_numeric_value(candidate) or math.inf) - target),
+            candidate,
+        ),
+        default=None,
+    )
+    if fallback is None:
+        return None
+    return _value(fallback)
+
+
+def _scenario_numeric_value(label: str) -> float | None:
+    for ch in label:
+        if ch.isdigit():
+            return float(ch)
+    return None
 
 
 def _plot_grouped_bars(
@@ -1688,6 +1857,7 @@ def _plot_absolute_emissions_combined(
         return
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
+    baseline_map = _load_mix_baseline_emissions(settings.aggregate_emission_root)
     plotted = False
     for idx, (mix, climates) in enumerate(sorted(mix_data.items(), key=lambda item: str(item[0]))):
         if not climates:
@@ -1719,6 +1889,21 @@ def _plot_absolute_emissions_combined(
         color = f"C{idx % 10}"
         ax.plot(years, center_vals, label=mix, color=color, linewidth=2)
         ax.fill_between(years, lower_vals, upper_vals, color=color, alpha=0.15)
+        baseline_series = baseline_map.get(mix) or demand_map.get(BASE_DEMAND_CASE)
+        if baseline_series:
+            baseline_years = sorted(
+                y for y in baseline_series if settings.plot_start <= y <= settings.plot_end
+            )
+            if baseline_years:
+                baseline_vals = [baseline_series[y] for y in baseline_years]
+                ax.plot(
+                    baseline_years,
+                    baseline_vals,
+                    color=color,
+                    linestyle="--",
+                    linewidth=1.5,
+                    label=f"{mix} base demand",
+                )
         plotted = True
 
     if not plotted:
@@ -1775,12 +1960,10 @@ def _plot_absolute_emissions_bars(
     if not mixes:
         return
 
-    candidate_years = [y for y in range(2025, 2051, 5) if settings.plot_start <= y <= settings.plot_end]
-    years = [
-        y
-        for y in candidate_years
-        if any(y in center for center, _, _ in mix_series.values())
+    candidate_years = [
+        y for y in range(2025, 2051, 5) if settings.plot_start <= y <= settings.plot_end
     ]
+    years = [y for y in candidate_years if any(y in center for center, _, _ in mix_series.values())]
     if not years:
         return
 
@@ -1838,7 +2021,7 @@ def _plot_temperature_timeseries(
         if series is not None and len(series) > 0
     }
     if not valid_series:
-        LOGGER.info("No temperature timeseries data available; skipping plot.")
+        LOGGER.debug("No temperature timeseries data available; skipping plot.")
         return
     # Compute mean across scenarios and plot a single line
     all_years = sorted({year for series in valid_series.values() for year in series})
@@ -1865,6 +2048,43 @@ def _plot_temperature_timeseries(
     fig.tight_layout()
     fig.savefig(output_path / f"{file_name}.{plot_format}", format=plot_format)
     plt.close(fig)
+
+
+def _load_mix_baseline_emissions(emission_root: Path | None) -> dict[str, dict[int, float]]:
+    if emission_root is None:
+        return {}
+    emission_root = Path(emission_root)
+    if not emission_root.exists():
+        return {}
+    baselines: dict[str, dict[int, float]] = {}
+    try:
+        mix_dirs = [path for path in emission_root.iterdir() if path.is_dir()]
+    except OSError:
+        return {}
+    column = f"absolute_{BASE_DEMAND_CASE}"
+    for mix_dir in mix_dirs:
+        co2_path = mix_dir / "co2.csv"
+        if not co2_path.exists():
+            continue
+        try:
+            frame = pd.read_csv(co2_path, comment="#")
+        except Exception:
+            continue
+        if "year" not in frame.columns or column not in frame.columns:
+            continue
+        try:
+            years = frame["year"].astype(int)
+            values = frame[column].astype(float)
+        except Exception:
+            continue
+        data = {
+            int(year): float(value)
+            for year, value in zip(years, values, strict=False)
+            if math.isfinite(value)
+        }
+        if data:
+            baselines[mix_dir.name] = data
+    return baselines
 
 
 def _plot_temperature_envelopes(

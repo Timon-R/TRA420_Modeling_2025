@@ -6,6 +6,7 @@ Collects cross‑module indicators and produces a concise overview (tabular CSV 
 
 - Emission deltas (Mt CO₂) and other pollutants per selected years, both aggregated across all countries and per country/pollutant combination.
 - Temperature deltas (°C) per selected years (global + pattern-scaled per country).
+- Local-climate impacts derived from the pattern-scaling module: per-country precipitation deltas (reported as mm/year), averages across the configured countries, and extreme-weather damages expressed as `% GDP` (per country and averaged).
 - Air-pollution results when available: mortality differences, mortality percent changes (percentage points), monetary benefits, concentration deltas (µg/m³) averaged across countries, and per-country concentration deltas.
 - SCC results by method:
   - Per-year SCC series at configured years when `aggregation: per_year`. Values are
@@ -55,10 +56,17 @@ air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted f
   1. `energy_mix`, `climate_scenario`, `demand_case`.
   2. `delta_co2_Mt_all_countries_<year>` plus per-country pollutant deltas (`delta_<pollutant>_<Country>_<year>`).
   3. `delta_<pollutant>_<unit>_all_countries_<year>` for NOx, SO₂, PM₂.₅, etc.
-  4. `delta_T_C_<year>` and `delta_T_<ISO3>_<year>`.
-  5. SCC columns `SCC_<method>_<year>_PPP_USD_2025_discounted_to_year_per_tco2` (or `scc_average_<method>`).
-  6. Damages columns `damages_PPP2020_usd_baseyear_<base_year>_<method>_<year>` and horizon sums (`damages_PPP2020_usd_baseyear_<base_year>_sum_<method>_<start>_to_<end>`).
-  7. Air-pollution metrics:
+ 4. `delta_T_C_<year>` and pattern-scaled temperature summaries:
+    - `delta_T_local_climate_C_all_countries_<year>` (equal-weight average across configured countries).
+    - `delta_T_<ISO3>_<year>` for every `local_climate_impacts.country`.
+ 5. Local-climate precipitation and extreme-weather damages:
+    - `local_climate_precipitation_delta_mm_per_year_all_countries_<year>` plus per-country
+      `local_climate_precipitation_delta_mm_per_year_<ISO3>_<year>`.
+    - `extreme_weather_pct_gdp_all_countries_<year>` plus per-country
+      `extreme_weather_pct_gdp_<ISO3>_<year>`.
+ 6. SCC columns `SCC_<method>_<year>_PPP_USD_2025_discounted_to_year_per_tco2` (or `scc_average_<method>`).
+ 7. Damages columns `damages_PPP2020_usd_baseyear_<base_year>_<method>_<year>` and horizon sums (`damages_PPP2020_usd_baseyear_<base_year>_sum_<method>_<start>_to_<end>`).
+ 8. Air-pollution metrics:
      - `air_pollution_mortality_difference_all_countries_<year>` (deaths/year),
      - `air_pollution_mortality_percent_change_all_countries_<year>` (percentage points),
      - `air_pollution_monetary_benefit_all_countries_usd_<year>`,
@@ -68,7 +76,7 @@ air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted f
        (`air_pollution_concentration_delta_<pollutant>_<Country>_microgram_per_m3_<year>`),
      - optional sums `air_pollution_mortality_difference_sum_all_countries_<start>_to_<end>` and
        `air_pollution_monetary_benefit_sum_all_countries_usd_<start>_to_<end>`.
-  8. Socioeconomic snapshots for the configured `years`.
+  9. Socioeconomic snapshots for the configured `years`.
   Per-country pollutant deltas and concentration deltas are pulled directly from
   `results/<run>/emissions/<mix>/<Country>/<pollutant>.csv` and
   `results/<run>/air_pollution/<scenario>/<pollutant>_concentration_summary.csv`.

@@ -6,6 +6,7 @@ import pytest
 from results_summary import (
     SummarySettings,
     _include_background_plots,
+    _lookup_extreme_weather,
     _plot_socioeconomic_timeseries,
     build_summary,
     write_summary_csv,
@@ -68,6 +69,11 @@ def test_build_summary_collects_metrics(tmp_path: Path):
                 "include_plots": False,
                 "plot_format": "png",
             }
+        },
+        "local_climate_impacts": {
+            "output_directory": "results/climate_scaled",
+            "countries": ["SRB"],
+            "extreme_weather_costs_file": str(root / "extreme_weather.csv"),
         },
     }
 
@@ -203,6 +209,51 @@ def test_build_summary_collects_metrics(tmp_path: Path):
         ],
     )
 
+    # Local climate impacts (pattern-scaled outputs)
+    climate_scaled_dir = root / "results" / "climate_scaled"
+    _write_csv(
+        climate_scaled_dir / "SRB_base_mix__policy_ssp245.csv",
+        [
+            {
+                "year": 2030,
+                "temperature_delta": 0.2,
+                "precipitation_delta_mm_per_day": 0.005,
+            },
+            {
+                "year": 2050,
+                "temperature_delta": 0.3,
+                "precipitation_delta_mm_per_day": 0.007,
+            },
+        ],
+    )
+    _write_csv(
+        climate_scaled_dir / "SRB_base_mix__base_demand_ssp245.csv",
+        [
+            {
+                "year": 2030,
+                "temperature_delta": 0.0,
+                "precipitation_delta_mm_per_day": 0.0,
+            },
+            {
+                "year": 2050,
+                "temperature_delta": 0.0,
+                "precipitation_delta_mm_per_day": 0.0,
+            },
+        ],
+    )
+
+    _write_csv(
+        root / "extreme_weather.csv",
+        [
+            {
+                "Country": "SRB",
+                "Scenario": "ssp2",
+                "2030_pct_gdp": 6.0,
+                "2050_pct_gdp": 7.0,
+            }
+        ],
+    )
+
     settings, methods, metrics_map = build_summary(root, config)
     summary_csv = write_summary_csv(settings, methods, metrics_map)
     assert summary_csv.exists()
@@ -236,6 +287,18 @@ def test_build_summary_collects_metrics(tmp_path: Path):
     settings_py, methods_py, metrics_map_py = build_summary(root, config)
     assert settings_py.aggregation_mode == "per_year"
 
+    policy_row = summary_df.loc[summary_df["demand_case"] == "policy"].iloc[0]
+    expected_precip = 0.005 * 365.0
+    assert policy_row["local_climate_precipitation_delta_mm_per_year_SRB_2030"] == pytest.approx(
+        expected_precip
+    )
+    assert policy_row[
+        "local_climate_precipitation_delta_mm_per_year_all_countries_2030"
+    ] == pytest.approx(expected_precip)
+    assert policy_row["extreme_weather_pct_gdp_SRB_2030"] == pytest.approx(6.0)
+    assert policy_row["extreme_weather_pct_gdp_all_countries_2050"] == pytest.approx(7.0)
+    assert policy_row["delta_T_local_climate_C_all_countries_2030"] == pytest.approx(0.2)
+
 
 def test_include_background_plots_copies_files(tmp_path: Path):
     climate_dir = tmp_path / "resources" / "climate"
@@ -256,6 +319,16 @@ def test_include_background_plots_copies_files(tmp_path: Path):
 
     for stem in ("background_climate_full", "background_climate_horizon"):
         assert (plots_dir / f"{stem}.png").exists()
+
+
+def test_lookup_extreme_weather_uses_closest_available_scenario():
+    costs = {
+        ("ALB", "ssp2"): {2030: 2.7},
+        ("ALB", "ssp5"): {2030: 3.0},
+    }
+    assert _lookup_extreme_weather(costs, "ALB", "ssp370", 2030) == pytest.approx(2.7)
+    assert _lookup_extreme_weather(costs, "ALB", "ssp585", 2030) == pytest.approx(3.0)
+    assert _lookup_extreme_weather(costs, "ALB", "ssp119", 2030) == pytest.approx(2.7)
 
 
 def test_plot_socioeconomics(tmp_path: Path):

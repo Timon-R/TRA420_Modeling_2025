@@ -173,3 +173,58 @@ def test_run_from_config_enforces_allowed_cases(tmp_path: Path):
     )
 
     assert set(results) == {"base_mix__base_demand", "base_mix__scen1_lower"}
+
+
+def test_mix_timeseries_interpolates_and_holds_tail(tmp_path: Path):
+    root = tmp_path
+    (root / "resources").mkdir()
+    (root / "results").mkdir()
+
+    factors = pd.DataFrame(
+        {
+            "technology": ["coal", "solar"],
+            "co2_mt_per_twh": [1.0, 0.0],
+        }
+    )
+    factors_path = root / "factors.csv"
+    factors.to_csv(factors_path, index=False)
+
+    mix_path = root / "mix.csv"
+    pd.DataFrame(
+        {
+            "Year": [2020, 2022],
+            "Coal": [0.6, 0.2],
+            "Solar": [0.4, 0.8],
+        }
+    ).to_csv(mix_path, index=False)
+
+    config = {
+        "calc_emissions": {
+            "emission_factors_file": str(factors_path),
+            "output_directory": str(root / "resources"),
+            "results_directory": str(root / "results"),
+            "demand_scenarios": {
+                "base_demand": {"values": {2020: 100.0, 2022: 120.0}},
+            },
+            "mix_scenarios": {
+                "ts_mix": {"type": "timeseries", "csv": str(mix_path)},
+            },
+        }
+    }
+    config_path = root / "config.yaml"
+    config_path.write_text(json.dumps(config))
+
+    results = run_from_config(
+        config_path,
+        default_years={"start": 2020, "end": 2023, "step": 1},
+    )
+
+    scenario = results["ts_mix__base_demand"]
+    demand = scenario.demand_twh
+    shares_2021 = scenario.generation_twh.loc[2021] / demand.loc[2021]
+    shares_2023 = scenario.generation_twh.loc[2023] / demand.loc[2023]
+
+    assert shares_2021["coal"] == pytest.approx(0.4)
+    assert shares_2021["solar"] == pytest.approx(0.6)
+    assert shares_2023["coal"] == pytest.approx(0.2)
+    assert shares_2023["solar"] == pytest.approx(0.8)

@@ -21,7 +21,8 @@ percentage of GDP) derived from published country compendiums.
 - **Climate outputs** (`climate_module.output_directory`): CSV files produced by
   `run_fair_scenarios.py` containing columns `year`, `temperature_baseline`, `temperature_adjusted`,
   `temperature_delta`, and the `climate_scenario` identifier.
-- **Extreme-weather baseline costs** (`data/pattern_scaling/extreme_weather_costs.csv`):
+- **Extreme-weather baseline costs** (`data/pattern_scaling/extreme_weather_costs.csv`,
+  configurable via `local_climate_impacts.extreme_weather_costs_file`):
   percent-of-GDP damages for each country/scenario combination used as baselines before scaling by
   the adjusted temperature increase.
 
@@ -32,6 +33,7 @@ local_climate_impacts:
   output_directory: results/climate_scaled
   scaling_factors_file: data/pattern_scaling/cmip6_pattern_scaling_by_country_mean.csv
   scaling_factors_file_precipitation: data/pattern_scaling/pattern_scaling_precipitation_by_country_mean.csv
+  extreme_weather_costs_file: data/pattern_scaling/extreme_weather_costs.csv
   scaling_weighting: area            # controls which patterns.<*> column to use
   countries: [USA, GBR, DEU]         # ISO3 codes to process
 
@@ -58,7 +60,10 @@ climate_module:
    damages from `extreme_weather_costs.csv` are scaled linearly by the adjusted temperature delta,
    yielding `% GDP` damages per country/scenario/year.
 
-Each output file is named `<ISO3>_<original_filename>.csv` and stores:
+Each per-country output file is stored under `<output_directory>/<ISO3>/<original_filename>.csv`
+and only covers the configured modeling horizon (`time_horizon` in `config.yaml`, e.g. 2025–2100). An
+additional `<output_directory>/AVERAGE/<original_filename>.csv` file contains the equal-weight
+average across all configured countries. Every file stores:
 
 - `year`
 - `temperature_baseline` (scaled)

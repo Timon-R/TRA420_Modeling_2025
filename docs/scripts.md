@@ -32,8 +32,8 @@ This project includes small wrappers around the core modules to make end‑to‑
 ## Local Climate Impacts
 
 - `scripts/run_local_climate_impacts.py`
-  - Scales global climate CSVs to country temperature/precipitation trajectories and prepares inputs for extreme-weather damages.
-  - Writes to `results/climate_scaled/`.
+  - Scales global climate CSVs to country temperature/precipitation trajectories (2025–2100 by default) and prepares inputs for extreme-weather damages.
+  - Writes per-country files under `results/climate_scaled/<ISO3>/<scenario>.csv` plus an `AVERAGE/` folder containing the equal-weight mean across configured countries.
 
 ## Economics (SCC)
 

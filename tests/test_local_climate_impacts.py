@@ -55,6 +55,7 @@ def temp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
                 "definitions": [{"id": "ssp245"}],
             },
         },
+        "time_horizon": {"start": 2030, "end": 2040},
     }
 
     return config
@@ -123,12 +124,13 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
                 "definitions": [{"id": "ssp245"}],
             },
         },
+        "time_horizon": {"start": 2030, "end": 2040},
     }
 
     factors = ps.get_scaling_factors(config)
     ps.scale_results(config, factors)
 
-    output_path = tmp_path / "results" / "climate_scaled" / "USA_policy_ssp245.csv"
+    output_path = tmp_path / "results" / "climate_scaled" / "USA" / "policy_ssp245.csv"
     assert output_path.exists()
     out = pd.read_csv(output_path)
     np.testing.assert_allclose(out["temperature_baseline"], [2.0, 3.0])
@@ -137,3 +139,8 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
     np.testing.assert_allclose(out["precipitation_adjusted_mm_per_day"], [4.8, 7.2])
     np.testing.assert_allclose(out["precipitation_delta_mm_per_day"], [0.8, 1.2])
     assert (out["iso3"] == "USA").all()
+    avg_path = tmp_path / "results" / "climate_scaled" / ps.AVERAGE_FOLDER / "policy_ssp245.csv"
+    assert avg_path.exists()
+    avg = pd.read_csv(avg_path)
+    assert (avg["iso3"] == ps.AVERAGE_FOLDER).all()
+    np.testing.assert_allclose(avg["temperature_delta"], [0.4, 0.6])
