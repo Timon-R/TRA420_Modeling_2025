@@ -13,14 +13,14 @@ calc_emissions:
       description: Albania Scenario 1 Upper bound (TWh).
       values:
         2025: 5.887708
-        2027: 3.197192
-        2100: 3.197192
+        2027: 4.604720
+        2100: 4.604720
     scen1_lower:
       description: Albania Scenario 1 Lower bound (TWh).
       values:
         2025: 5.887708
-        2027: 3.893849
-        2100: 3.893849
+        2027: 5.301377
+        2100: 5.301377
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).

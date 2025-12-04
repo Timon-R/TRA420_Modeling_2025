@@ -6,21 +6,21 @@ calc_emissions:
     base_demand:
       description: Montenegro base demand (was 'reference') (TWh).
       values:
-        2025: 2.694
-        2027: 2.694
-        2100: 2.694
+        2025: 2.69462
+        2027: 2.69462
+        2100: 2.69462
     scen1_upper:
       description: Montenegro upper bound (TWh).
       values:
-        2025: 2.694
-        2027: 1.899
-        2100: 1.899
+        2025: 2.69462
+        2027: 1.986906
+        2100: 1.986906
     scen1_lower:
       description: Montenegro lower bound (TWh).
       values:
-        2025: 2.694
-        2027: 1.899
-        2100: 1.899
+        2025: 2.69462
+        2027: 2.578497
+        2100: 2.578497
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).

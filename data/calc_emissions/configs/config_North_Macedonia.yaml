@@ -13,14 +13,14 @@ calc_emissions:
       description: North Macedonia upper bound (TWh).
       values:
         2025: 5.781678
-        2027: 2.808863
-        2100: 2.808863
+        2027: 5.100748
+        2100: 5.100748
     scen1_lower:
       description: North Macedonia lower bound (TWh).
       values:
         2025: 5.781678
-        2027: 3.065098
-        2100: 3.065098
+        2027: 5.356983
+        2100: 5.356983
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).

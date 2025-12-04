@@ -13,14 +13,14 @@ calc_emissions:
       description: Bosnia-Herzegovina upper bound (TWh).
       values:
         2025: 10.355600
-        2027: 5.963888
-        2100: 5.963888
+        2027: 9.803521
+        2100: 9.803521
     scen1_lower:
       description: Bosnia-Herzegovina lower bound (TWh).
       values:
         2025: 10.355600
-        2027: 5.904654
-        2100: 5.904654
+        2027: 9.744288
+        2100: 9.744288
     # moved custom_example from scenarios -> demand_scenarios if you want it evaluated as a demand case
     custom_example_demand:
       description: Custom demand example (TWh).
