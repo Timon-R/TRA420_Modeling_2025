@@ -12,21 +12,21 @@ temperature responses, and evaluating local/global impact metrics such as the So
   - `climate_module/` — FaIR wrappers and scenario tools.
   - `air_pollution/` — maps non-CO₂ deltas to concentration-driven health impacts.
   - `economic_module/` — SCC utilities (damages, discounting, reporting).
-  - `pattern_scaling/` — pattern-scaling of global responses to country trajectories.
+  - `local_climate_impacts/` — converts global responses into country-level temperature and precipitation trajectories.
 - `scripts/` — CLI helpers such as `run_fair_scenarios.py` for quick experiments.
 - `data/` — input datasets (raw and processed). Includes `calc_emissions/` (country configs and
-  emission factors), air-pollution statistics, GDP/Population tables, and pattern-scaling factors.
+  emission factors), air-pollution statistics, GDP/Population tables, and local climate-impact scaling factors.
   The canonical Excel workbooks for electricity mixes and technology intensities
   (`Electricity_OECD.xlsx`, `Emission_factors_all.xlsx`) now live under
   `data/calc_emissions/`.
 - `results/` — generated outputs. Emissions live under `results/<run>/emissions/<mix>/<Country>/` (per-country) plus `results/<run>/emissions/All_countries/<mix>/`. All downstream modules reuse the same `<run>` prefix so each experiment (set via `run.output_subdir`) keeps its own climate, air-pollution, economic, and summary folders.
-- `tests/` — pytest suite covering emissions, climate, economic, and pattern-scaling modules.
+- `tests/` — pytest suite covering emissions, climate, economic, and local climate-impact modules.
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
 - `pyproject.toml` — project metadata plus Ruff lint/format configuration.
 - `.gitignore` — excludes generated results and other artifacts.
 - `README.md` — usage guidance and development conventions.
-- `docs/` — module documentation and CLI guides (`economic_module.md`, `climate_module.md`, `pattern_scaling.md`, `air_pollution.md`, `results_summary.md`, `scripts.md`).
+- `docs/` — module documentation and CLI guides (`economic_module.md`, `climate_module.md`, `local_climate_impacts.md`, `air_pollution.md`, `results_summary.md`, `scripts.md`).
 
 ## Getting Started
 
@@ -91,7 +91,7 @@ Outputs mirror the per-country structure (`co2.csv`, `nox.csv`, `so2.csv`, `pm25
 
 ### Full end-to-end run
 
-To execute emissions, climate, pattern scaling, air-pollution and SCC modules in a single command (using the defaults from `config.yaml`):
+To execute emissions, climate, local climate impacts, air-pollution and SCC modules in a single command (using the defaults from `config.yaml`):
 
 ```bash
 python scripts/run_full_pipeline.py
@@ -102,7 +102,7 @@ Typical workflow (driven by `config.yaml`):
 1. **Emissions** – `python scripts/run_calc_emissions.py --country <name>` (per-country deltas) or `python scripts/run_calc_emissions_all.py` (aggregated deltas); run before downstream modules so `results/<run>/emissions/<mix>/<Country>/` and `results/<run>/emissions/All_countries/<mix>/` hold current data.
 2. **Air-pollution impacts** – `python scripts/run_air_pollution.py` combines non-CO₂ deltas with concentration stats to estimate concentration changes, mortality percentage changes, absolute deaths, and monetary benefits (per pollutant and aggregated).
 3. **Global climate** – `python scripts/run_fair_scenarios.py` writes `results/<run>/climate/*.csv`. Each CSV includes a `climate_scenario` column, and the run also produces background baseline CSVs (`background_climate_full.csv`, `background_climate_horizon.csv`) for plotting/reference.
-4. **Pattern scaling (optional)** – `python scripts/run_pattern_scaling.py` consumes the global climate CSVs plus the scaling factors table and produces per-country temperature deltas under `results/<run>/climate_scaled`.
+4. **Local climate impacts (optional)** – `python scripts/run_local_climate_impacts.py` consumes the global climate CSVs plus the scaling factors table and produces per-country temperature and precipitation deltas under `results/<run>/climate_scaled`.
 5. **Economics (pulse SCC only)** – `python scripts/run_scc.py` infers the SSP family from the climate CSVs, builds socioeconomics (SSP tables or DICE mode), and evaluates the SCC via the FaIR pulse workflow once per climate scenario/discount method. Outputs include `pulse_scc_timeseries_<method>_<ssp>.csv` plus per-mix damages (`results/<run>/economic/<mix>/damages_<method>_<scenario>.csv`).
 6. **Summary** – `PYTHONPATH=src python scripts/generate_summary.py` compiles emissions, climate, SCC, damages, and air-pollution metrics into `results/<run>/summary/summary.csv` and generates mix-specific plots with lower/mean/upper envelopes. A shared `plots/scc_timeseries.png` shows SCC trajectories by SSP.
 
@@ -233,11 +233,11 @@ All runtime settings live in `config.yaml`.
     - `emission_scenarios`: which emission scenario folders in `results/emissions/All_countries/` to process (`all` or list of mix names). Only `co2.csv` feeds FaIR; other pollutant files are optional analytics inputs.
     - When `economic_module.damage_duration_years` exceeds the emission horizon, FaIR extends its run to `start + duration - 1` and holds the terminal emission delta constant.
 
-- `pattern_scaling`
-  - Consumes global climate CSVs and applies country-specific pattern-scaling coefficients.
+- `local_climate_impacts`
+  - Consumes global climate CSVs and applies country-specific scaling coefficients to produce temperature and precipitation responses.
   - Key options:
     - `output_directory`: destination for per-country scaled results.
-    - `scaling_factors_file`: path to the scaling table (e.g., `data/cmip6_pattern_scaling_by_country_mean.csv`).
+    - `scaling_factors_file`: path to the scaling table (e.g., `data/pattern_scaling/cmip6_pattern_scaling_by_country_mean.csv`).
     - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`, `pop.2100`).
     - `countries`: ISO3 codes to generate outputs for.
   - Matches climate scenarios using the first four characters of each `climate_module.climate_scenarios.definitions[*].id` or the `climate_scenario` column injected into climate CSVs.
@@ -270,11 +270,11 @@ All runtime settings live in `config.yaml`.
   - Toggle `include_plots` to disable chart generation (useful on headless systems) or change `plot_format` for publication-ready graphics.
     - When `economic_module.damage_duration_years` exceeds the emission horizon, FaIR extends its run to `start + duration - 1` and holds the terminal emission delta constant.
 
-- `pattern_scaling`
-  - Consumes global climate CSVs and applies country-specific pattern-scaling coefficients.
+- `local_climate_impacts`
+  - Consumes global climate CSVs and applies country-specific scaling coefficients to produce temperature and precipitation responses.
   - Key options:
     - `output_directory`: destination for per-country scaled results.
-    - `scaling_factors_file`: path to the scaling table (e.g., `data/cmip6_pattern_scaling_by_country_mean.csv`).
+    - `scaling_factors_file`: path to the scaling table (e.g., `data/pattern_scaling/cmip6_pattern_scaling_by_country_mean.csv`).
     - `scaling_weighting`: selects which `patterns.*` column to use (e.g., `area`, `gdp.2000`, `pop.2100`).
     - `countries`: ISO3 codes to generate outputs for.
   - Matches climate scenarios using the first four characters of each `climate_module.climate_scenarios.definitions[*].id` or the `climate_scenario` column injected into climate CSVs.

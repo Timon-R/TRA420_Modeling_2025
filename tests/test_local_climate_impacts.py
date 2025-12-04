@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pattern_scaling import scaling as ps
+from local_climate_impacts import scaling as ps
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def temp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     precip_df.to_csv(precip_file, index=False)
 
     config = {
-        "pattern_scaling": {
+        "local_climate_impacts": {
             "output_directory": "results/climate_scaled",
             "scaling_factors_file": "data/scaling.csv",
             "scaling_factors_file_precipitation": "data/precip_scaling.csv",
@@ -110,7 +110,7 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
     ).to_csv(precip_file, index=False)
 
     config = {
-        "pattern_scaling": {
+        "local_climate_impacts": {
             "output_directory": "results/climate_scaled",
             "scaling_factors_file": "data/scaling.csv",
             "scaling_factors_file_precipitation": "data/precip_scaling.csv",
@@ -133,7 +133,7 @@ def test_scale_results_writes_scaled_csv(tmp_path: Path, monkeypatch: pytest.Mon
     out = pd.read_csv(output_path)
     np.testing.assert_allclose(out["temperature_baseline"], [2.0, 3.0])
     np.testing.assert_allclose(out["temperature_delta"], [0.4, 0.6])
-    np.testing.assert_allclose(out["precipitation_baseline"], [4.0, 6.0])
-    np.testing.assert_allclose(out["precipitation_adjusted"], [4.8, 7.2])
-    np.testing.assert_allclose(out["precipitation_delta"], [0.8, 1.2])
+    np.testing.assert_allclose(out["precipitation_baseline_mm_per_day"], [4.0, 6.0])
+    np.testing.assert_allclose(out["precipitation_adjusted_mm_per_day"], [4.8, 7.2])
+    np.testing.assert_allclose(out["precipitation_delta_mm_per_day"], [0.8, 1.2])
     assert (out["iso3"] == "USA").all()

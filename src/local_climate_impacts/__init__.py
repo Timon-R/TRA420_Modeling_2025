@@ -1,4 +1,4 @@
-"""Calculates regional climate change patterns from FaIR temperature projections."""
+"""Local climate impacts (temperature/precipitation scaling) utilities."""
 
 from .scaling import (
     DEFAULT_CONFIG_PATH,
