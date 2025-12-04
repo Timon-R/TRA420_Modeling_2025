@@ -80,48 +80,10 @@ from economic_module import (  # noqa: E402
 from economic_module.socioeconomics import DiceSocioeconomics  # noqa: E402
 
 ROOT = path_setup.ROOT
-
-
-def _discover_emission_scenarios(emission_root: Path, baseline_case: str) -> list[str]:
-    """Infer available emission scenario names from aggregated emission files."""
-    scenarios: set[str] = set()
-    if not emission_root.exists():
-        return []
-    for mix_dir in emission_root.iterdir():
-        if not mix_dir.is_dir():
-            continue
-        co2_path = mix_dir / "co2.csv"
-        if not co2_path.exists():
-            continue
-        try:
-            df = pd.read_csv(co2_path, comment="#")
-        except Exception:
-            continue
-        demand_cases: set[str] = set()
-        for col in df.columns:
-            if col.startswith("delta_"):
-                demand_cases.add(col.removeprefix("delta_"))
-            if col.startswith("absolute_"):
-                demand_cases.add(col.removeprefix("absolute_"))
-        for demand in demand_cases:
-            scenarios.add(f"{mix_dir.name}__{demand}")
-    if baseline_case:
-        scenarios.add(baseline_case)
-    return sorted(scenarios)
-
-
 AVAILABLE_DISCOUNT_METHODS = ["constant_discount", "ramsey_discount"]
 AVAILABLE_AGGREGATIONS: tuple[SCCAggregation, ...] = ("average", "per_year")
 
 RUN_DIRECTORY: str | None = None
-
-
-def _format_path(path: Path) -> Path:
-    abs_path = path.resolve()
-    try:
-        return abs_path.relative_to(ROOT)
-    except ValueError:  # pragma: no cover - filesystem safety
-        return abs_path
 
 
 def _safe_name(name: str) -> str:

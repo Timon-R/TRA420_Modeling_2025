@@ -1,6 +1,6 @@
 run:
-  mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
-  output_subdir: test   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
+  mode: scenario  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  output_subdir: SA   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
 time_horizon:
@@ -182,7 +182,7 @@ economic_module:
     threshold_scale: 0.2  # Scale factor applied during threshold amplification.
     threshold_power: 2.0  # Power governing the curvature of the threshold amplification term.
     use_saturation: false  # Enable saturation to smoothly cap damages at max_fraction.
-    max_fraction: 0.99  # Maximum allowable GDP damage fraction.
+    max_fraction: 0.95  # Maximum allowable GDP damage fraction.
     saturation_mode: rational  # 'rational' yields a smooth cap; 'clamp' clips once max_fraction is exceeded.
     use_catastrophic: false  # Enable catastrophic add-ons when temperatures exceed catastrophic_temperature.
     catastrophic_temperature: 5.0  # Temperature threshold for catastrophic damages (°C).

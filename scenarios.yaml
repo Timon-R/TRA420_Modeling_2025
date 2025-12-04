@@ -197,3 +197,26 @@ damage_disaster_gamma_3p0_cat_on:
     damage_function:
       use_catastrophic: true
       disaster_gamma: 3.0
+
+damage_catastrophic_temp_3_cat_on_saturation_on_frac_095_rational:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      catastrophic_temperature: 3.0
+      use_saturation: true 
+      max_fraction: 0.95 
+      saturation_mode: rational
+
+catastrophic_saturation_acceleration_defaults_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: true
+      use_saturation: true
+      use_threshold: true
+
+saturation_acceleration_defaults_on:
+  economic_module:
+    damage_function:
+      use_catastrophic: false
+      use_saturation: true
+      use_threshold: true
