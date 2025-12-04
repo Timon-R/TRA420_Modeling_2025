@@ -91,6 +91,9 @@ country configs.
   linearly via `_values_to_series`.
 - Ensure technology names in mixes match the lowercase `technology` column in
   the emission factor file; missing entries default to zero share.
+- Mix timeseries CSVs are interpolated between the provided years (and held
+  constant beyond the last datapoint), so you can provide five-year snapshots
+  and let the runner fill in annual values automatically.
 - The module raises an error when mix shares sum to zero for any year, preventing divide
   by zero during normalisation.
 - CO₂ deltas (`co2.csv`) drive the climate pipeline; other pollutants support

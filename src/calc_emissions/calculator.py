@@ -177,6 +177,9 @@ def run_from_config(
             mix_ts = _load_mix_timeseries(mix_csv_path)
             mix_ts.columns = [c.strip().lower() for c in mix_ts.columns.astype(str)]
             mix_ts = mix_ts.reindex(years)
+            # Align with requested years, interpolate between known points,
+            # then hold the tail constant.
+            mix_ts = mix_ts.interpolate(method="index")
             mix_ts = mix_ts.ffill().bfill()
             mix_ts = mix_ts.fillna(0.0)
             for t in emission_factors.index:
@@ -591,8 +594,10 @@ def _resolve_generation_by_technology(
 
     if isinstance(mix_cfg, dict) and mix_cfg.get("type") == "timeseries" and "csv" in mix_cfg:
         mix_ts = _load_mix_timeseries(mix_cfg["csv"])
-        # Align years: reindex mix_ts to available_years and fill missing with 0
-        mix_ts = mix_ts.reindex(available_years).fillna(0.0)
+        # Align with requested years, interpolate between known points, and hold the tail constant
+        mix_ts = mix_ts.reindex(available_years)
+        mix_ts = mix_ts.interpolate(method="index")
+        mix_ts = mix_ts.ffill().bfill()
         # Ensure columns for all technologies exist (missing -> 0)
         for t in techs:
             if t not in mix_ts.columns:

@@ -6,7 +6,6 @@ import argparse
 import importlib
 import logging
 import os
-import re
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -35,8 +34,6 @@ from config_paths import (  # noqa: E402
 )
 
 LOGGER = logging.getLogger("pipeline")
-
-_CLIMATE_SUFFIX_PATTERN = re.compile(r"_(ssp[0-9]{2,3}[a-z0-9]*)$", re.IGNORECASE)
 
 
 def _load_scenario_filter(config: Mapping[str, object]) -> list[str]:

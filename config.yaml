@@ -1,6 +1,6 @@
 run:
-  mode: scenarios  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
-  output_subdir: SA   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
+  mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
+  output_subdir: test   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
 time_horizon:
@@ -64,7 +64,7 @@ climate_module:
     run: #all  # FaIR pathways to evaluate (use 'all' or list of SSP IDs).
       - ssp245
       - ssp370  
-      - ssp585
+      #- ssp585
     definitions:
       - id: ssp119
         label: ssp119  # SSP1-1.9: strong mitigation, ~1.5°C, rapid decarbonisation
@@ -169,7 +169,7 @@ economic_module:
   emission_column: delta  # Column to read from emission CSVs (delta or absolute).
   emission_to_tonnes: 1000000.0  # Multiplier applied to emission values (1e6 converts Mt → t).
   damage_function:
-    mode: dice  # Switch between quadratic DICE baseline and custom polynomial coefficients.
+    mode: custom  # Switch between quadratic DICE baseline and custom polynomial coefficients 'custom' or 'dice'
     delta1: 0.0  # Linear coefficient in the default DICE damage polynomial.
     delta2: 0.00236  # Quadratic coefficient in the default DICE damage polynomial.
     custom_terms:
