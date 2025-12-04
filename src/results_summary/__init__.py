@@ -81,6 +81,7 @@ class ScenarioMetrics:
     damages_sum: dict[str, dict[str, float]] = field(default_factory=dict)
     scc_average: dict[str, float] = field(default_factory=dict)
     damage_total_usd: dict[str, float] = field(default_factory=dict)
+    emission_absolute_timeseries: dict[int, float] | None = None
     emission_timeseries: dict[int, float] | None = None
     temperature_timeseries: dict[int, float] | None = None
 
@@ -1146,6 +1147,13 @@ def build_summary(
         else:
             emission_series_dict = emission_series
 
+        absolute_frame = load_scenario_absolute(emission_root, scenario)
+        absolute_series = _load_full_series(absolute_frame, "absolute")
+        if not absolute_series:
+            absolute_series_dict: dict[int, float] | None = None
+        else:
+            absolute_series_dict = absolute_series
+
         mortality_path = (air_output_dir / scenario / "total_mortality_summary.csv").resolve()
         (
             mortality_delta,
@@ -1232,6 +1240,7 @@ def build_summary(
                 damages_sum=damage_sums,
                 scc_average=scc_average,
                 damage_total_usd=damage_totals,
+                emission_absolute_timeseries=absolute_series_dict,
                 emission_timeseries=emission_series_dict,
                 temperature_timeseries=temperature_series,
             )
@@ -1664,6 +1673,151 @@ def _plot_emission_timeseries(
     plt.close(fig)
 
 
+def _plot_absolute_emissions_combined(
+    mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
+    settings: SummarySettings,
+    output_dir: Path,
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping absolute emission plots")
+        return
+
+    if not mix_data:
+        return
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    plotted = False
+    for idx, (mix, climates) in enumerate(sorted(mix_data.items(), key=lambda item: str(item[0]))):
+        if not climates:
+            continue
+        demand_map = climates.get("all") or next(iter(climates.values()), None)
+        if not demand_map:
+            continue
+        lower = demand_map.get("scen1_lower")
+        upper = demand_map.get("scen1_upper")
+        center = demand_map.get("scen1_mean") or demand_map.get(BASE_DEMAND_CASE)
+        if center is None and lower and upper:
+            center = {
+                year: (lower_val + upper[year]) / 2.0
+                for year, lower_val in lower.items()
+                if year in upper
+            }
+        if center is None or lower is None or upper is None:
+            continue
+        years = sorted(
+            y
+            for y in set(center) & set(lower) & set(upper)
+            if settings.plot_start <= y <= settings.plot_end
+        )
+        if not years:
+            continue
+        center_vals = [center[y] for y in years]
+        lower_vals = [lower[y] for y in years]
+        upper_vals = [upper[y] for y in years]
+        color = f"C{idx % 10}"
+        ax.plot(years, center_vals, label=mix, color=color, linewidth=2)
+        ax.fill_between(years, lower_vals, upper_vals, color=color, alpha=0.15)
+        plotted = True
+
+    if not plotted:
+        plt.close(fig)
+        return
+
+    ax.set_title("Absolute Emissions — All Countries")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Mt CO₂/year")
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(
+        output_dir / f"absolute_emissions_all_mix.{settings.plot_format}",
+        format=settings.plot_format,
+    )
+    plt.close(fig)
+
+
+def _plot_absolute_emissions_bars(
+    mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
+    settings: SummarySettings,
+    output_dir: Path,
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping absolute emission bar plots")
+        return
+
+    if not mix_data:
+        return
+
+    mixes = []
+    mix_series: dict[str, tuple[dict[int, float], dict[int, float], dict[int, float]]] = {}
+    for mix, climates in mix_data.items():
+        demand_map = climates.get("all") or next(iter(climates.values()), None)
+        if not demand_map:
+            continue
+        lower = demand_map.get("scen1_lower")
+        upper = demand_map.get("scen1_upper")
+        center = demand_map.get("scen1_mean") or demand_map.get(BASE_DEMAND_CASE)
+        if center is None and lower and upper:
+            center = {
+                year: (lower_val + upper[year]) / 2.0
+                for year, lower_val in lower.items()
+                if year in upper
+            }
+        if center is None or lower is None or upper is None:
+            continue
+        mixes.append(mix)
+        mix_series[mix] = (center, lower, upper)
+
+    if not mixes:
+        return
+
+    candidate_years = [y for y in range(2025, 2051, 5) if settings.plot_start <= y <= settings.plot_end]
+    years = [
+        y
+        for y in candidate_years
+        if any(y in center for center, _, _ in mix_series.values())
+    ]
+    if not years:
+        return
+
+    x = np.arange(len(years))
+    width = 0.8 / max(len(mixes), 1)
+    fig, ax = plt.subplots(figsize=(max(6, len(years) * 1.6), 4.5))
+
+    for idx, mix in enumerate(sorted(mixes)):
+        center, lower, upper = mix_series[mix]
+        vals = [center.get(y, np.nan) for y in years]
+        err_lower = [max(0.0, center.get(y, np.nan) - lower.get(y, np.nan)) for y in years]
+        err_upper = [max(0.0, upper.get(y, np.nan) - center.get(y, np.nan)) for y in years]
+        offsets = x + (idx - (len(mixes) - 1) / 2) * width
+        ax.bar(
+            offsets,
+            vals,
+            width,
+            label=mix,
+            yerr=[err_lower, err_upper],
+            capsize=4,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(y) for y in years])
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Mt CO₂/year")
+    ax.set_title("Absolute Emissions — Bars with Uncertainty")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(
+        output_dir / f"absolute_emissions_bar.{settings.plot_format}",
+        format=settings.plot_format,
+    )
+    plt.close(fig)
+
+
 def _plot_temperature_timeseries(
     data: Mapping[str, Mapping[int, float] | None],
     *,
@@ -1913,6 +2067,7 @@ def write_plots(
         return data
 
     mix_emission = _collect_by_mix("emission_delta_mt")
+    mix_absolute_emission = _collect_by_mix("emission_absolute_timeseries")
     mix_mortality = _collect_by_mix("mortality_delta")
     mix_mortality_value = _collect_by_mix("mortality_value_delta")
     mix_damages = _collect_by_mix("damages_usd", method="ramsey_discount")
@@ -1924,6 +2079,16 @@ def write_plots(
         settings,
         output_dir,
         per_climate=False,
+    )
+    _plot_absolute_emissions_combined(
+        mix_absolute_emission,
+        settings,
+        output_dir,
+    )
+    _plot_absolute_emissions_bars(
+        mix_absolute_emission,
+        settings,
+        output_dir,
     )
     _plot_lines_for_mix(
         mix_mortality,
