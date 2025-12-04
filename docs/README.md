@@ -13,8 +13,8 @@ calculations.
   risk coefficients, baseline mortality, and weighting schemes.
 - `economic_module.md` – social cost of carbon workflow, damage functions, and
   discounting methods.
-- `pattern_scaling.md` – pattern scaling pipeline, required inputs, and output
-  structure for country-level climate trajectories.
+- `local_climate_impacts.md` – local climate scaling (temperature, precipitation)
+  plus extreme-weather damage conventions.
 
 Refer to the module documents when creating scenarios, extending the pipeline,
 or validating scientific assumptions.

@@ -140,8 +140,8 @@ def run_pipeline(countries: Iterable[str] | None = None) -> None:
     fair_module = importlib.reload(fair_module)
     fair_module.main()
 
-    LOGGER.info("Applying pattern scaling")
-    pattern_module = importlib.import_module("run_pattern_scaling")
+    LOGGER.info("Applying local climate impacts scaling")
+    pattern_module = importlib.import_module("run_local_climate_impacts")
     pattern_module = importlib.reload(pattern_module)
     pattern_module.main()
 

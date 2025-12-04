@@ -29,10 +29,10 @@ This project includes small wrappers around the core modules to make end‑to‑
   - Writes `results/climate/<emission>_<climate>.csv`.
   - Baseline CSVs are not duplicated in results; each file contains a baseline column.
 
-## Pattern Scaling
+## Local Climate Impacts
 
-- `scripts/run_pattern_scaling.py`
-  - Scales global climate CSVs to country trajectories.
+- `scripts/run_local_climate_impacts.py`
+  - Scales global climate CSVs to country temperature/precipitation trajectories and prepares inputs for extreme-weather damages.
   - Writes to `results/climate_scaled/`.
 
 ## Economics (SCC)

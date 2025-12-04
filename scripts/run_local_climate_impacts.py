@@ -1,4 +1,4 @@
-"""Apply pattern scaling factors to climate module results."""
+"""Apply local climate impact scaling factors to climate module results."""
 
 from __future__ import annotations
 
@@ -6,20 +6,20 @@ import logging
 from pathlib import Path
 
 from config_paths import apply_results_run_directory, get_results_run_directory
-from pattern_scaling import (
+from local_climate_impacts import (
     DEFAULT_ROOT,
     get_scaling_factors,
     load_config,
     scale_results,
 )
 
-LOGGER = logging.getLogger("pattern_scaling.run")
+LOGGER = logging.getLogger("local_climate_impacts.run")
 
 
 def main() -> None:
-    LOGGER.info("Loading pattern-scaling configuration")
+    LOGGER.info("Loading local-climate-impacts configuration")
     config = load_config()
-    ps_cfg = config.get("pattern_scaling", {})
+    ps_cfg = config.get("local_climate_impacts", {})
     run_directory = get_results_run_directory(config)
     countries = ps_cfg.get("countries", [])
     weighting = ps_cfg.get("scaling_weighting", "area")
@@ -35,7 +35,7 @@ def main() -> None:
         run_directory,
         repo_root=DEFAULT_ROOT,
     )
-    LOGGER.info("Pattern-scaled outputs written to %s", output_dir)
+    LOGGER.info("Local climate impact outputs written to %s", output_dir)
 
 
 if __name__ == "__main__":

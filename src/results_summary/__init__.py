@@ -1244,7 +1244,7 @@ def build_summary(
         run_directory,
         plot_end,
     )
-    pattern_cfg = config.get("pattern_scaling", {}) if isinstance(config, Mapping) else {}
+    pattern_cfg = config.get("local_climate_impacts", {}) if isinstance(config, Mapping) else {}
     pattern_output_directory: Path | None = None
     pattern_countries: list[str] | None = None
     if isinstance(pattern_cfg, Mapping):

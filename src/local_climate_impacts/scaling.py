@@ -1,4 +1,4 @@
-"""Calculates local temperature and precipitation changes using pattern scaling."""
+"""Calculates local temperature and precipitation changes using local pattern scaling."""
 
 from __future__ import annotations
 
@@ -49,9 +49,9 @@ def _resolve_path(path_like: str | Path) -> Path:
 
 
 def get_scaling_factors(config: Dict[str, Any]) -> pd.DataFrame:
-    """Load and filter pattern-scaling factors based on configuration."""
+    """Load and filter local-climate scaling factors based on configuration."""
 
-    ps_cfg = _config_value(config, "pattern_scaling")
+    ps_cfg = _config_value(config, "local_climate_impacts")
     cm_cfg = _config_value(config, "climate_module")
 
     scaling_file = _resolve_path(ps_cfg.get("scaling_factors_file"))
@@ -69,7 +69,7 @@ def get_scaling_factors(config: Dict[str, Any]) -> pd.DataFrame:
 
     countries = ps_cfg.get("countries", [])
     if not countries:
-        raise ValueError("'pattern_scaling.countries' must list at least one ISO3 code.")
+        raise ValueError("'local_climate_impacts.countries' must list at least one ISO3 code.")
 
     definitions = _config_value(cm_cfg, "climate_scenarios", "definitions")
     scenario_prefixes = {str(entry["id"]).lower()[:4] for entry in definitions if "id" in entry}
@@ -128,7 +128,7 @@ def _detect_scenario_prefix(
 def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None:
     """Apply pattern-scaling factors to climate-module temperature results."""
 
-    ps_cfg = _config_value(config, "pattern_scaling")
+    ps_cfg = _config_value(config, "local_climate_impacts")
     cm_cfg = _config_value(config, "climate_module")
     run_directory = get_results_run_directory(config)
 
@@ -148,7 +148,7 @@ def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None
 
     countries = set(ps_cfg.get("countries", []))
     if not countries:
-        raise ValueError("'pattern_scaling.countries' must list at least one ISO3 code.")
+        raise ValueError("'local_climate_impacts.countries' must list at least one ISO3 code.")
 
     for climate_file in sorted(climate_dir.glob("*.csv")):
         frame = pd.read_csv(climate_file)
@@ -182,10 +182,15 @@ def scale_results(config: Dict[str, Any], scaling_factors: pd.DataFrame) -> None
                 row.iloc[0]["precipitation_scaling_factor"]
             ):
                 precip_factor = float(row.iloc[0]["precipitation_scaling_factor"])
-                scaled["precipitation_baseline"] = frame["temperature_baseline"] * precip_factor
-                scaled["precipitation_adjusted"] = frame["temperature_adjusted"] * precip_factor
-                scaled["precipitation_delta"] = (
-                    scaled["precipitation_adjusted"] - scaled["precipitation_baseline"]
+                scaled["precipitation_baseline_mm_per_day"] = (
+                    frame["temperature_baseline"] * precip_factor
+                )
+                scaled["precipitation_adjusted_mm_per_day"] = (
+                    frame["temperature_adjusted"] * precip_factor
+                )
+                scaled["precipitation_delta_mm_per_day"] = (
+                    scaled["precipitation_adjusted_mm_per_day"]
+                    - scaled["precipitation_baseline_mm_per_day"]
                 )
 
             if "climate_scenario" in frame.columns:
