@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from .constants import BASE_DEMAND_CASE, POLLUTANTS
+from .constants import BASE_DEMAND_CASE, BASE_MIX_CASE, POLLUTANTS
 
 LOGGER = logging.getLogger("calc_emissions")
 if not LOGGER.handlers:
@@ -55,6 +55,8 @@ def run_from_config(
     results_run_directory: str | None = None,
     allowed_demand_cases: Sequence[str] | None = None,
     allowed_mix_cases: Sequence[str] | None = None,
+    baseline_mix_case: str | None = None,
+    delta_baseline_mode: str | None = None,
 ) -> dict[str, EmissionScenarioResult]:
     """Run emission calculations based on ``config.yaml`` and write delta CSVs."""
     from config_paths import get_config_path  # local import to avoid cycle
@@ -129,6 +131,14 @@ def run_from_config(
     baseline_case = (
         str(module_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
+    delta_mode = (
+        str(delta_baseline_mode or module_cfg.get("delta_baseline_mode", "per_mix"))
+        .strip()
+        .lower()
+        or "per_mix"
+    )
+    if delta_mode not in {"per_mix", "global"}:
+        raise ValueError("calc_emissions.delta_baseline_mode must be 'per_mix' or 'global'.")
     if baseline_case not in demand_scenarios:
         raise ValueError(
             f"Demand scenarios must include '{baseline_case}'. "
@@ -165,6 +175,16 @@ def run_from_config(
         if missing:
             raise KeyError(f"Mix scenarios missing required cases: {missing}")
         mix_scenarios = {case: mix_scenarios[case] for case in allowed}
+    baseline_mix = (
+        str(baseline_mix_case or module_cfg.get("baseline_mix_case", BASE_MIX_CASE)).strip()
+        or BASE_MIX_CASE
+    )
+    if baseline_mix not in mix_scenarios:
+        available = ", ".join(sorted(mix_scenarios)) or "<none>"
+        raise ValueError(
+            f"Baseline mix '{baseline_mix}' is not defined in mix_scenarios. "
+            f"Available mixes: {available}. Update calc_emissions.baseline_mix_case or mix_scenarios."
+        )
 
     results: dict[str, EmissionScenarioResult] = {}
     per_mix_results: dict[str, dict[str, EmissionScenarioResult]] = {}
@@ -222,7 +242,10 @@ def run_from_config(
             per_mix_results[mix_name][demand_name] = scenario_result
             results[scenario_id] = scenario_result
 
-        _assign_mix_deltas(per_mix_results[mix_name], baseline_case, years)
+        if delta_mode == "per_mix":
+            _assign_mix_deltas(per_mix_results[mix_name], baseline_case, years)
+    if delta_mode == "global":
+        _assign_global_deltas(results, baseline_mix, baseline_case, years)
     if synthetic_mix:
         # Provide alias keys using demand-case names for compatibility with consumers
         for res in list(results.values()):
@@ -309,6 +332,34 @@ def _assign_mix_deltas(
         baseline_res.total_emissions_mt["co2"] = baseline_co2
 
     for scenario in demand_map.values():
+        totals = scenario.total_emissions_mt.get("co2")
+        if totals is None:
+            totals = pd.Series(np.zeros(len(baseline_co2)), index=baseline_co2.index, dtype=float)
+        else:
+            totals = totals.reindex(baseline_co2.index, fill_value=0.0)
+        scenario.total_emissions_mt["co2"] = totals
+        scenario.delta_mtco2 = totals - baseline_co2
+
+
+def _assign_global_deltas(
+    results: Mapping[str, EmissionScenarioResult],
+    baseline_mix: str,
+    baseline_case: str,
+    years: Sequence[int],
+) -> None:
+    baseline_key = compose_scenario_name(baseline_case, baseline_mix)
+    baseline_res = results.get(baseline_key)
+    if baseline_res is None:
+        raise ValueError(
+            f"Missing baseline scenario '{baseline_key}' required for global deltas."
+        )
+    baseline_co2 = baseline_res.total_emissions_mt.get("co2")
+    if baseline_co2 is None:
+        index = pd.Index([int(y) for y in years])
+        baseline_co2 = pd.Series(np.zeros(len(index)), index=index, dtype=float)
+        baseline_res.total_emissions_mt["co2"] = baseline_co2
+
+    for scenario in results.values():
         totals = scenario.total_emissions_mt.get("co2")
         if totals is None:
             totals = pd.Series(np.zeros(len(baseline_co2)), index=baseline_co2.index, dtype=float)

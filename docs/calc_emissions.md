@@ -66,6 +66,10 @@ Each file (e.g. ``config_Albania.yaml``) wraps a full ``calc_emissions`` block:
   across the country's scenarios.
 - ``baseline`` – references the demand/mix scenario used as the reference when
   calculating deltas.
+- ``baseline_mix_case`` / ``baseline_demand_case`` / ``delta_baseline_mode`` – set
+  ``delta_baseline_mode`` to ``global`` to subtract every scenario from the
+  single combination ``<baseline_mix_case>__<baseline_demand_case>``. The default
+  ``per_mix`` behaviour compares each mix to its own baseline demand.
 - ``demand_scenarios`` / ``mix_scenarios`` – mappings that define the demand
   cases and mix cases to combine. Every mix is paired with every demand case, and
   scenario identifiers follow `<mix>__<demand>` (for example `base_mix__scen1_lower`).

@@ -15,12 +15,15 @@ def _build_mix_dataframe(
     demand_map: Mapping[str, EmissionScenarioResult],
     baseline_case: str,
     pollutant: str,
+    baseline_override: pd.Series | None = None,
 ) -> pd.DataFrame:
     baseline = demand_map.get(baseline_case)
-    if baseline is None:
+    if baseline is None and baseline_override is None:
         raise ValueError(f"Baseline demand case '{baseline_case}' not found for mix.")
 
-    if pollutant in baseline.total_emissions_mt:
+    if baseline_override is not None:
+        index = baseline_override.index
+    elif pollutant in baseline.total_emissions_mt:
         index = baseline.total_emissions_mt[pollutant].index
     else:
         idxs = [
@@ -35,7 +38,9 @@ def _build_mix_dataframe(
             index = index.union(more)
 
     data = {"year": list(map(int, index))}
-    baseline_series = None
+    baseline_series = baseline_override
+    if baseline_series is None:
+        baseline_series = None
     for demand_name, res in demand_map.items():
         series = res.total_emissions_mt.get(pollutant)
         if series is None:
@@ -44,7 +49,7 @@ def _build_mix_dataframe(
             series_aligned = series.reindex(index, fill_value=0.0)
         abs_col = f"absolute_{demand_name}"
         data[abs_col] = list(series_aligned.values)
-        if demand_name == baseline_case:
+        if demand_name == baseline_case and baseline_override is None:
             baseline_series = series_aligned
 
     if baseline_series is None:
@@ -72,12 +77,16 @@ def write_mix_directory(
     demand_map: Mapping[str, EmissionScenarioResult],
     destination: Path,
     baseline_case: str = BASE_DEMAND_CASE,
+    baseline_override: Mapping[str, pd.Series] | None = None,
 ) -> None:
     dest_dir = Path(destination)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     for pollutant in set().union(*(res.total_emissions_mt.keys() for res in demand_map.values())):
-        df = _build_mix_dataframe(demand_map, baseline_case, pollutant)
+        override = None
+        if baseline_override is not None:
+            override = baseline_override.get(pollutant)
+        df = _build_mix_dataframe(demand_map, baseline_case, pollutant, override)
         if df.empty:
             continue
         unit = POLLUTANTS.get(pollutant, {}).get("unit", "")
@@ -91,15 +100,17 @@ def write_per_country_results(
     per_country_map: Dict[str, Dict[str, EmissionScenarioResult]],
     destination_root: Path,
     baseline_case: str = BASE_DEMAND_CASE,
+    baseline_override_map: Mapping[str, Mapping[str, pd.Series]] | None = None,
 ) -> None:
     """Write per-country mix CSVs to <dest>/<mix>/<Country>/<pollutant>.csv."""
     destination_root = Path(destination_root)
     for country, scenarios in per_country_map.items():
         if not scenarios:
             continue
+        country_override = baseline_override_map.get(country) if baseline_override_map else None
         grouped: Dict[str, Dict[str, EmissionScenarioResult]] = {}
         for result in scenarios.values():
             grouped.setdefault(result.mix_case, {})[result.demand_case] = result
         for mix_name, demand_map in grouped.items():
             dest = destination_root / mix_name / country
-            write_mix_directory(mix_name, demand_map, dest, baseline_case)
+            write_mix_directory(mix_name, demand_map, dest, baseline_case, country_override)

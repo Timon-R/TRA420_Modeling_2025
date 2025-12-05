@@ -21,7 +21,7 @@ import logging
 # Ensure src/ is importable before importing the calculator
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Mapping
 
 import pandas as pd
 import yaml
@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from calc_emissions import (  # noqa: E402
     BASE_DEMAND_CASE,
+    BASE_MIX_CASE,
     EmissionScenarioResult,
     compose_scenario_name,
     run_from_config,
@@ -75,6 +76,8 @@ def _load_country_settings() -> (
         list[str],
         dict[str, int] | None,
         str | None,
+        str,
+        str,
         str,
     ]
 ):
@@ -138,6 +141,17 @@ def _load_country_settings() -> (
     baseline_case = (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
+    baseline_mix_case = (
+        str(countries_cfg.get("baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)))
+        .strip()
+        or BASE_MIX_CASE
+    )
+    delta_mode = (
+        str(countries_cfg.get("delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")))
+        .strip()
+        .lower()
+        or "per_mix"
+    )
     global_horizon = config.get("time_horizon")
     return (
         directory,
@@ -149,6 +163,8 @@ def _load_country_settings() -> (
         global_horizon,
         run_directory,
         baseline_case,
+        baseline_mix_case,
+        delta_mode,
     )
 
 
@@ -219,6 +235,8 @@ def _accumulate_result(target: EmissionScenarioResult, addition: EmissionScenari
 def _build_aggregated_results(
     per_country_results: List[dict[str, EmissionScenarioResult]],
     baseline_case: str,
+    baseline_mix_case: str,
+    delta_mode: str,
 ) -> dict[str, EmissionScenarioResult]:
     aggregated: Dict[tuple[str, str], EmissionScenarioResult] = {}
     for result_map in per_country_results:
@@ -234,11 +252,18 @@ def _build_aggregated_results(
     if not aggregated:
         raise ValueError("No scenarios aggregated – ensure country configs are configured.")
 
+    baseline_global = None
+    if delta_mode == "global":
+        baseline_global = aggregated.get((baseline_mix_case, baseline_case))
+        if baseline_global is None:
+            raise ValueError(
+                f"Missing baseline scenario '{baseline_mix_case}__{baseline_case}' for aggregation."
+            )
+
     combined: Dict[str, EmissionScenarioResult] = {}
     for (mix_case, demand_case), scenario in aggregated.items():
-        baseline = aggregated.get((mix_case, baseline_case))
-        if baseline is not None:
-            baseline_co2 = baseline.total_emissions_mt.get("co2")
+        if delta_mode == "global":
+            baseline_co2 = baseline_global.total_emissions_mt.get("co2") if baseline_global else None
             totals = scenario.total_emissions_mt.get("co2")
             if baseline_co2 is not None and totals is not None:
                 idx = baseline_co2.index.union(totals.index)
@@ -249,7 +274,20 @@ def _build_aggregated_results(
             else:
                 scenario.delta_mtco2 = scenario.delta_mtco2 * 0.0
         else:
-            scenario.delta_mtco2 = scenario.delta_mtco2 * 0.0
+            baseline = aggregated.get((mix_case, baseline_case))
+            if baseline is not None:
+                baseline_co2 = baseline.total_emissions_mt.get("co2")
+                totals = scenario.total_emissions_mt.get("co2")
+                if baseline_co2 is not None and totals is not None:
+                    idx = baseline_co2.index.union(totals.index)
+                    baseline_aligned = baseline_co2.reindex(idx, fill_value=0.0)
+                    totals_aligned = totals.reindex(idx, fill_value=0.0)
+                    scenario.total_emissions_mt["co2"] = totals_aligned
+                    scenario.delta_mtco2 = totals_aligned - baseline_aligned
+                else:
+                    scenario.delta_mtco2 = scenario.delta_mtco2 * 0.0
+            else:
+                scenario.delta_mtco2 = scenario.delta_mtco2 * 0.0
         scenario.name = compose_scenario_name(demand_case, mix_case)
         combined[scenario.name] = scenario
 
@@ -269,13 +307,16 @@ def _write_outputs(
     aggregated: dict[str, EmissionScenarioResult],
     destinations: Iterable[Path],
     baseline_case: str,
+    baseline_override: Mapping[str, pd.Series] | None = None,
 ) -> None:
     grouped = _group_by_mix(aggregated)
     resolved_destinations = [Path(path) for path in destinations]
     for mix_name, demand_map in grouped.items():
         for dest in resolved_destinations:
             dest.mkdir(parents=True, exist_ok=True)
-            write_mix_directory(mix_name, demand_map, dest / mix_name, baseline_case)
+            write_mix_directory(
+                mix_name, demand_map, dest / mix_name, baseline_case, baseline_override
+            )
 
 
 # The per-country writer implementation has been moved to
@@ -301,6 +342,8 @@ def run_all_countries(
         global_horizon,
         run_directory,
         baseline_case,
+        baseline_mix_case,
+        delta_mode,
     ) = _load_country_settings()
 
     countries_filter = [c.replace(" ", "_") for c in countries] if countries else None
@@ -311,10 +354,13 @@ def run_all_countries(
     mix_filter = (
         [s for s in scenarios if s] if scenarios else [m for m in configured_mix_cases if m]
     )
+    if baseline_mix_case and baseline_mix_case not in mix_filter:
+        mix_filter.append(baseline_mix_case)
     demand_order = [d for d in configured_demand_cases if d]
 
     per_country_results: List[dict[str, EmissionScenarioResult]] = []
     per_country_map: dict[str, dict[str, EmissionScenarioResult]] = {}
+    per_country_baselines: dict[str, dict[str, pd.Series]] = {}
     LOGGER.info("Running calc_emissions for %d countries", len(configs))
     for country, cfg_path in configs.items():
         LOGGER.info("  • %s", country)
@@ -324,6 +370,8 @@ def run_all_countries(
             results_run_directory=run_directory,
             allowed_demand_cases=demand_order or None,
             allowed_mix_cases=mix_filter or None,
+            baseline_mix_case=baseline_mix_case,
+            delta_baseline_mode=delta_mode,
         )
 
         available_mixes = {res.mix_case for res in results.values()}
@@ -360,6 +408,20 @@ def run_all_countries(
             if res.mix_case in requested_mixes and res.demand_case in selected_demands:
                 filtered_results[name] = res
 
+        if delta_mode == "global":
+            baseline_key = compose_scenario_name(baseline_case, baseline_mix_case)
+            baseline_res = filtered_results.get(baseline_key)
+            if baseline_res is None:
+                raise KeyError(
+                    f"Country '{country}' missing global baseline scenario '{baseline_key}'. "
+                    "Ensure baseline_mix_case and baseline_demand_case exist for every country."
+                )
+            per_country_baselines[country] = {
+                pollutant: series.copy()
+                for pollutant, series in baseline_res.total_emissions_mt.items()
+                if series is not None
+            }
+
         per_country_results.append(filtered_results)
         per_country_map[country] = filtered_results
 
@@ -384,17 +446,38 @@ def run_all_countries(
                         years_cfg,
                         global_horizon,
                     )
-    aggregated_results = _build_aggregated_results(per_country_results, baseline_case)
+    aggregated_results = _build_aggregated_results(
+        per_country_results, baseline_case, baseline_mix_case, delta_mode
+    )
 
     aggregate_dest = output or default_output
     destinations = [aggregate_dest]
     if results_output is not None:
         destinations.append(results_output)
 
-    _write_outputs(aggregated_results, destinations, baseline_case)
+    baseline_override = None
+    if delta_mode == "global":
+        baseline_key = compose_scenario_name(baseline_case, baseline_mix_case)
+        baseline_res = aggregated_results.get(baseline_key)
+        if baseline_res is None:
+            raise KeyError(
+                f"Missing aggregated baseline scenario '{baseline_key}' for global deltas."
+            )
+        baseline_override = {
+            pollutant: series.copy()
+            for pollutant, series in baseline_res.total_emissions_mt.items()
+            if series is not None
+        }
+
+    _write_outputs(aggregated_results, destinations, baseline_case, baseline_override)
 
     if per_country_map:
-        write_per_country_results(per_country_map, per_country_root, baseline_case)
+        write_per_country_results(
+            per_country_map,
+            per_country_root,
+            baseline_case,
+            per_country_baselines if delta_mode == "global" else None,
+        )
 
     LOGGER.info("Aggregated deltas written to %s", aggregate_dest)
     if results_output is not None:
@@ -414,6 +497,8 @@ def _parse_args() -> argparse.Namespace:
         _global_horizon,
         _run_directory,
         _baseline_case,
+        _baseline_mix_case,
+        _delta_mode,
     ) = _load_country_settings()
     parser = argparse.ArgumentParser(
         description="Run emissions for all countries and aggregate deltas."
