@@ -3,10 +3,17 @@
 Outputs:
   - Bar chart of total CO₂ saved (All countries) at selected years with upper/lower error bars.
   - Bar chart of CO₂ saved per country at selected years with upper/lower error bars.
+  - Per-country pairwise bars (e.g., 2030 vs 2050) with error bars.
+  - Cumulative totals and per-country bars (e.g., up to 2030 and 2050).
 
-By default, the script uses the repository config to locate emission outputs and
-plots to ``results/<run>/summary/additional_plots``. Positive values indicate
-emissions avoided (deltas are sign-flipped).
+Defaults: uses the repository config to locate emission outputs and writes plots to
+``results/<run>/summary/additional_plots/<mix>/``. Positive values indicate emissions avoided.
+
+Key flags:
+- --mix: mix scenario(s) to plot (default: calc_emissions.countries.mix_scenarios or baseline mix).
+- --years: annual reporting years (default: 2030 2050).
+- --config: path to config.yaml (default: repository config).
+- --results-root: override results root to point at a specific run (default: config/run directory).
 """
 
 from __future__ import annotations
@@ -32,8 +39,16 @@ def _load_config(config_path: Path) -> dict:
         return yaml.safe_load(handle) or {}
 
 
-def _resolve_paths(config: Mapping[str, object], mix: str) -> tuple[Path, Path]:
-    """Return (aggregate_root, per_country_root) with run directory applied."""
+def _resolve_paths(
+    config: Mapping[str, object], mix: str, results_root_override: Path | None = None
+) -> tuple[Path, Path]:
+    """Return (aggregate_root, per_country_root) with run directory applied or overridden."""
+    if results_root_override is not None:
+        base = results_root_override
+        agg_root = base / "emissions" / "All_countries" / mix
+        per_country_root = base / "emissions" / mix
+        return agg_root, per_country_root
+
     run_directory = get_results_run_directory(config)
     calc_cfg = config.get("calc_emissions", {}) or {}
     countries_cfg = calc_cfg.get("countries", {}) or {}
@@ -301,6 +316,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate additional emission-savings plots.")
     parser.add_argument("--config", default=str(ROOT / "config.yaml"), help="Path to config.yaml")
     parser.add_argument(
+        "--results-root",
+        default=None,
+        help="Override results root to select a specific run (e.g., results/global).",
+    )
+    parser.add_argument(
         "--mix",
         nargs="*",
         default=None,
@@ -340,16 +360,21 @@ def main() -> None:
     if not mixes:
         mixes = [BASE_MIX_CASE]
 
-    base_output_dir = apply_results_run_directory(
-        (ROOT / "results" / "summary" / "additional_plots").resolve(),
-        get_results_run_directory(config),
-        repo_root=ROOT,
+    results_root_override = Path(args.results_root).resolve() if args.results_root else None
+    base_output_dir = (
+        (results_root_override / "summary" / "additional_plots").resolve()
+        if results_root_override
+        else apply_results_run_directory(
+            (ROOT / "results" / "summary" / "additional_plots").resolve(),
+            get_results_run_directory(config),
+            repo_root=ROOT,
+        )
     )
 
     years = sorted({int(y) for y in args.years})
 
     for mix in mixes:
-        agg_root, per_country_root = _resolve_paths(config, mix)
+        agg_root, per_country_root = _resolve_paths(config, mix, results_root_override)
         output_dir = base_output_dir / mix
         output_dir.mkdir(parents=True, exist_ok=True)
 
