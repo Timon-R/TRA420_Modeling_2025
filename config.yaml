@@ -26,7 +26,7 @@ calc_emissions:
       - WAM
     baseline_demand_case: base_demand
     baseline_mix_case: base_mix  # Mix used as the reference for global deltas
-    delta_baseline_mode: global  # 'per_mix' keeps current behaviour; 'global' uses baseline_mix_case + baseline_demand_case
+    delta_baseline_mode: per_mix  # 'per_mix' keeps current behaviour; 'global' uses baseline_mix_case + baseline_demand_case
 
 climate_module:
   output_directory: results/climate  # Directory for climate results (relative to repository root).
