@@ -132,8 +132,8 @@ socioeconomics:
       initial_stock_trillions: null  # Initial capital stock (trillion USD); null solves from steady state.
     capital_share: 0.36507  # Labour-share complement (α) in the Cobb–Douglas production function.
   currency_conversion:
-    usd_2017_to_2025: 1 #1.28  # PPP GDP deflator to convert 2017 USD to 2025 USD (BEA GDPDEF).
-    usd_2023_to_2025: 1 #1.05  # PPP GDP deflator to convert 2023 USD to 2025 USD (BEA GDPDEF).
+    usd_2017_to_2025: 1.28  # PPP GDP deflator to convert 2017 USD to 2025 USD (BEA GDPDEF).
+    usd_2023_to_2025: 1.05  # PPP GDP deflator to convert 2023 USD to 2025 USD (BEA GDPDEF).
 
 local_climate_impacts:
   output_directory: results/climate_scaled
