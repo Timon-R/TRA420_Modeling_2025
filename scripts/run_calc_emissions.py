@@ -20,7 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from calc_emissions import BASE_DEMAND_CASE, EmissionScenarioResult, run_from_config  # noqa: E402
+from calc_emissions import (  # noqa: E402
+    BASE_DEMAND_CASE,
+    BASE_MIX_CASE,
+    EmissionScenarioResult,
+    compose_scenario_name,
+    run_from_config,
+)
 from calc_emissions.writers import write_per_country_results  # noqa: E402
 from config_paths import apply_results_run_directory, get_results_run_directory  # noqa: E402
 
@@ -37,6 +43,8 @@ def _load_country_settings() -> (
         list[str],
         str,
         Path,
+        str,
+        str,
     ]
 ):
     config_path = ROOT / "config.yaml"
@@ -53,6 +61,17 @@ def _load_country_settings() -> (
     demand_cases = countries_cfg.get("demand_scenarios", []) or []
     baseline_case = (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
+    )
+    baseline_mix_case = (
+        str(countries_cfg.get("baseline_mix_case", module_cfg.get("baseline_mix_case", BASE_MIX_CASE)))
+        .strip()
+        or BASE_MIX_CASE
+    )
+    delta_mode = (
+        str(countries_cfg.get("delta_baseline_mode", module_cfg.get("delta_baseline_mode", "per_mix")))
+        .strip()
+        .lower()
+        or "per_mix"
     )
     per_country_root_cfg = Path(countries_cfg.get("resources_root", "results/emissions"))
     if per_country_root_cfg.is_absolute():
@@ -74,6 +93,8 @@ def _load_country_settings() -> (
         demand_cases,
         baseline_case,
         per_country_root,
+        baseline_mix_case,
+        delta_mode,
     )
 
 
@@ -127,6 +148,8 @@ def main() -> None:
         configured_demand_cases,
         baseline_case,
         per_country_root,
+        baseline_mix_case,
+        delta_mode,
     ) = _load_country_settings()
 
     if not args.config and not args.country:
@@ -139,12 +162,18 @@ def main() -> None:
     config_path = _resolve_config_path(args, directory, pattern)
     LOGGER.info("Running calc_emissions for %s", config_path)
 
+    mix_filter = [m for m in configured_mix_cases if m]
+    if baseline_mix_case and baseline_mix_case not in mix_filter:
+        mix_filter.append(baseline_mix_case)
+
     results = run_from_config(
         config_path,
         default_years=global_horizon,
         results_run_directory=run_directory,
         allowed_demand_cases=configured_demand_cases or None,
-        allowed_mix_cases=configured_mix_cases or None,
+        allowed_mix_cases=mix_filter or None,
+        baseline_mix_case=baseline_mix_case,
+        delta_baseline_mode=delta_mode,
     )
 
     country_label = (
@@ -152,7 +181,26 @@ def main() -> None:
         if args.country
         else Path(config_path).stem.replace("config_", "")
     )
-    write_per_country_results({country_label: results}, per_country_root, baseline_case)
+    baseline_override_map = None
+    if delta_mode == "global":
+        baseline_key = compose_scenario_name(baseline_case, baseline_mix_case)
+        baseline_res = results.get(baseline_key)
+        if baseline_res is None:
+            raise KeyError(
+                f"Missing global baseline scenario '{baseline_key}' for {country_label}. "
+                "Ensure baseline_mix_case and baseline_demand_case exist."
+            )
+        baseline_override_map = {
+            country_label: {
+                pollutant: series.copy()
+                for pollutant, series in baseline_res.total_emissions_mt.items()
+                if series is not None
+            }
+        }
+
+    write_per_country_results(
+        {country_label: results}, per_country_root, baseline_case, baseline_override_map
+    )
     LOGGER.info("Per-country results written under %s", per_country_root)
 
     mixes: dict[str, dict[str, EmissionScenarioResult]] = {}

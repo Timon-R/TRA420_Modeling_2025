@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 BASE_DEMAND_CASE = "base_demand"
+BASE_MIX_CASE = "base_mix"
 
 POLLUTANTS: dict[str, dict[str, object]] = {
     "co2": {

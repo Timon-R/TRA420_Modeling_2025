@@ -27,19 +27,27 @@ and write per-scenario CSVs consumed by downstream modules.
 
 For technology i in year t:
 
-1. Generation (TWh):  
-   `G_{i,t} = D_t × s_{i,t}`  
-   where `D_t` is annual demand (TWh) and `s_{i,t}` is the technology share.
+1. Generation (TWh):
 
-2. Emissions (Mt):  
-   `E_{i,t} = G_{i,t} × f_i`  
-   with `f_i` expressed in Mt/TWh after harmonisation.
+   $$
+   G_{i,t} = D_t \times s_{i,t}
+   $$
+
+   where $D_t$ is annual demand (TWh) and $s_{i,t}$ is the technology share.
+
+2. Emissions (Mt):
+
+   $$
+   E_{i,t} = G_{i,t} \times f_i
+   $$
+
+   with $f_i$ expressed in Mt/TWh after harmonisation.
 
 3. Aggregate totals by pollutant:  
-   `E^{tot}_{p,t} = Σ_i E_{i,t}`
+   $$E^{tot}_{p,t} = Σ_i E_{i,t}$$
 
 4. Scenario delta vs baseline:  
-   `ΔE_{p,t} = E^{scenario}_{p,t} - E^{baseline}_{p,t}`
+   $$ΔE_{p,t} = E^{scenario}_{p,t} - E^{baseline}_{p,t}$$
 
 ## Configuration Keys
 
@@ -58,6 +66,10 @@ Each file (e.g. ``config_Albania.yaml``) wraps a full ``calc_emissions`` block:
   across the country's scenarios.
 - ``baseline`` – references the demand/mix scenario used as the reference when
   calculating deltas.
+- ``baseline_mix_case`` / ``baseline_demand_case`` / ``delta_baseline_mode`` – set
+  ``delta_baseline_mode`` to ``global`` to subtract every scenario from the
+  single combination ``<baseline_mix_case>__<baseline_demand_case>``. The default
+  ``per_mix`` behaviour compares each mix to its own baseline demand.
 - ``demand_scenarios`` / ``mix_scenarios`` – mappings that define the demand
   cases and mix cases to combine. Every mix is paired with every demand case, and
   scenario identifiers follow `<mix>__<demand>` (for example `base_mix__scen1_lower`).
