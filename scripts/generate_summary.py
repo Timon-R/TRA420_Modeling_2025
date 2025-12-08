@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -32,11 +33,25 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
     logger = logging.getLogger("generate_summary")
 
+    parser = argparse.ArgumentParser(description="Generate summary tables and plots.")
+    parser.add_argument(
+        "--run-directory",
+        "--run-subdir",
+        dest="run_directory",
+        default=None,
+        help="Override results.run_directory to target a specific run (e.g., 'global').",
+    )
+    args = parser.parse_args()
+
     try:
         config = _load_config()
     except FileNotFoundError as exc:
         logger.error(str(exc))
         return
+
+    if args.run_directory:
+        results_cfg = config.setdefault("results", {})
+        results_cfg["run_directory"] = args.run_directory
 
     if "results" not in config or "summary" not in config.get("results", {}):
         logger.info("results.summary not configured; skipping summary generation.")
