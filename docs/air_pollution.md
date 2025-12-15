@@ -59,7 +59,7 @@ $$
 r_{p,t} = \frac{E^{\text{scenario}}_{p,t}}{E^{\text{baseline}}_{p,t}}
 $$
 
-- **Concentration change with electricity share \(s_{c,p}\)**  
+- **Concentration change with electricity share $s_{c,p}$**  
   Baseline concentrations stay at their full observed values, while only the
   electricity-attributable share is scaled by the emission ratio:
 
@@ -72,7 +72,7 @@ $$
 $$
 
 - **Relative-risk slope**  
-  With relative risk `RR` specified for a reference delta `Δ_ref`, the slope is
+  With relative risk $RR$ specified for a reference delta $\Delta_{ref}$, the slope is
 
 $$
 \beta_p = \frac{\ln(\text{RR}_p)}{\Delta_{\text{ref}, p}}
