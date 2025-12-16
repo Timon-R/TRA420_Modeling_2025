@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from math import ceil
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -32,6 +33,7 @@ from config_paths import apply_results_run_directory, get_config_path, get_resul
 
 LOGGER = logging.getLogger("additional_plots")
 ROOT = Path(__file__).resolve().parents[1]
+PM25_SCENARIO = "scen1_mean"
 
 
 def _load_config(config_path: Path) -> dict:
@@ -68,6 +70,123 @@ def _resolve_paths(
     ) / mix
 
     return agg_root, per_country_root
+
+
+def _resolve_air_pollution_root(
+    config: Mapping[str, object], results_root_override: Path | None = None
+) -> Path:
+    """Return the air pollution root with run directory applied or overridden."""
+    if results_root_override is not None:
+        return (results_root_override / "air_pollution").resolve()
+
+    run_directory = get_results_run_directory(config)
+    ap_cfg = config.get("air_pollution", {}) or {}
+    ap_root = Path(ap_cfg.get("output_directory", "results/air_pollution"))
+    if not ap_root.is_absolute():
+        ap_root = (ROOT / ap_root).resolve()
+    return apply_results_run_directory(ap_root, run_directory, repo_root=ROOT)
+
+
+def _load_pm25_deltas(csv_path: Path) -> pd.DataFrame:
+    """Load PM2.5 deltas, ensuring required columns are present."""
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Missing PM2.5 file: {csv_path}")
+    df = pd.read_csv(csv_path)
+    required = {"year", "country", "delta_concentration_micro_g_per_m3"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise KeyError(f"Missing columns in {csv_path}: {sorted(missing)}")
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["year"])
+    df["year"] = df["year"].astype(int)
+    return df[["year", "country", "delta_concentration_micro_g_per_m3"]]
+
+
+def _collect_pm25_by_mix(
+    mixes: Sequence[str],
+    air_pollution_root: Path,
+    scenario: str,
+) -> dict[str, pd.DataFrame]:
+    """Load pm25_concentration_summary.csv for each mix under the provided scenario."""
+    collected: dict[str, pd.DataFrame] = {}
+    for mix in mixes:
+        csv_path = air_pollution_root / f"{mix}__{scenario}" / "pm25_concentration_summary.csv"
+        try:
+            collected[mix] = _load_pm25_deltas(csv_path)
+        except Exception as exc:
+            LOGGER.warning("Skipping PM2.5 for %s: %s", mix, exc)
+    return collected
+
+
+def _plot_pm25_delta_tiles(
+    pm25_data: Mapping[str, pd.DataFrame],
+    output_dir: Path,
+    scenario: str,
+) -> None:
+    """Plot per-country tiles of PM2.5 delta concentrations across mixes."""
+    if not pm25_data:
+        LOGGER.warning("No PM2.5 data loaded; skipping tiled plot.")
+        return
+
+    countries: set[str] = set()
+    for df in pm25_data.values():
+        countries.update(df["country"].dropna().unique().tolist())
+    if not countries:
+        LOGGER.warning("No countries found in PM2.5 data; skipping tiled plot.")
+        return
+
+    sorted_countries = sorted(countries)
+    ncols = 3
+    nrows = ceil(len(sorted_countries) / ncols)
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(4.5 * ncols, 3.0 * nrows),
+        sharex=True,
+        sharey=False,
+    )
+    axes_list = axes.flatten() if hasattr(axes, "flatten") else [axes]
+
+    color_map = {
+        "base_mix": "#2a6fdb",
+        "WAM": "#db8b2a",
+        "WEM": "#2aa05a",
+    }
+    handles = []
+    labels = []
+
+    for idx, country in enumerate(sorted_countries):
+        ax = axes_list[idx]
+        for mix, df in pm25_data.items():
+            subset = df[df["country"] == country].sort_values("year")
+            if subset.empty:
+                continue
+            color = color_map.get(mix)
+            line = ax.plot(
+                subset["year"],
+                subset["delta_concentration_micro_g_per_m3"],
+                label=mix,
+                linewidth=1.6,
+                color=color,
+            )[0]
+            if mix not in labels:
+                handles.append(line)
+                labels.append(mix)
+        ax.axhline(0.0, color="#aaaaaa", linewidth=0.8, linestyle="--", alpha=0.8)
+        ax.set_title(country)
+        ax.grid(True, linestyle="--", alpha=0.3)
+    for extra_ax in axes_list[len(sorted_countries) :]:
+        extra_ax.axis("off")
+
+    fig.text(0.5, 0.04, "Year", ha="center")
+    fig.text(0.04, 0.5, "Δ PM2.5 concentration (µg/m³)", va="center", rotation="vertical")
+    if handles:
+        fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.95))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"pm25_delta_concentration_tiles_{scenario}.png"
+    fig.savefig(output_dir / fname, format="png")
+    plt.close(fig)
 
 
 def _load_deltas(co2_path: Path, demand_cases: Iterable[str], baseline_case: str) -> pd.DataFrame:
@@ -370,6 +489,10 @@ def main() -> None:
             repo_root=ROOT,
         )
     )
+    air_pollution_root = _resolve_air_pollution_root(config, results_root_override)
+    pm25_output_dir = base_output_dir / "air_pollution"
+    LOGGER.info("Using air pollution path: %s", air_pollution_root)
+    LOGGER.info("PM2.5 plots will be written to: %s", pm25_output_dir)
 
     years = sorted({int(y) for y in args.years})
 
@@ -403,6 +526,9 @@ def main() -> None:
         _plot_country_pairwise(
             per_country_root, demand_cases, baseline_case, years, output_dir / "per_country", mix
         )
+
+    pm25_data = _collect_pm25_by_mix(mixes, air_pollution_root, PM25_SCENARIO)
+    _plot_pm25_delta_tiles(pm25_data, pm25_output_dir, PM25_SCENARIO)
 
 
 if __name__ == "__main__":
