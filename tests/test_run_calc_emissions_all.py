@@ -83,6 +83,8 @@ def test_build_aggregated_results_creates_scenario_names():
     aggregated = run_calc_emissions_all._build_aggregated_results(
         [{"mixA__base_demand": base, "mixA__scen1": scen}],
         baseline_case="base_demand",
+        baseline_mix_case="mixA",
+        delta_mode="per_mix",
     )
     assert {"mixA__base_demand", "mixA__scen1"} <= set(aggregated.keys())
     delta = aggregated["mixA__scen1"].delta_mtco2.iloc[0]
