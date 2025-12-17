@@ -15,7 +15,7 @@ from typing import Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from calc_emissions.constants import BASE_DEMAND_CASE
+from calc_emissions.constants import BASE_DEMAND_CASE, BASE_MIX_CASE
 from calc_emissions.scenario_io import (
     list_available_scenarios,
     load_scenario_absolute,
@@ -1995,6 +1995,83 @@ def _plot_emission_difference_vs_base(
     plt.close(fig)
 
 
+def _plot_emission_difference_vs_global_baseline(
+    mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
+    settings: SummarySettings,
+    output_dir: Path,
+    *,
+    baseline_mix: str = BASE_MIX_CASE,
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping global-baseline emission plot")
+        return
+
+    if not mix_data:
+        return
+
+    baseline_map = _load_mix_baseline_emissions(settings.aggregate_emission_root)
+    global_baseline = baseline_map.get(baseline_mix)
+    if not global_baseline:
+        LOGGER.info(
+            "Global baseline emissions not found for mix '%s'; skipping plot.",
+            baseline_mix,
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    plotted = False
+    for idx, (mix, climates) in enumerate(sorted(mix_data.items(), key=lambda item: str(item[0]))):
+        if not climates:
+            continue
+        demand_map = climates.get("all") or next(iter(climates.values()), None)
+        if not demand_map:
+            continue
+        lower = demand_map.get("scen1_lower")
+        upper = demand_map.get("scen1_upper")
+        center = demand_map.get("scen1_mean") or demand_map.get(BASE_DEMAND_CASE)
+        if center is None and lower and upper:
+            center = {
+                year: (lower_val + upper[year]) / 2.0
+                for year, lower_val in lower.items()
+                if year in upper
+            }
+        if center is None or lower is None or upper is None:
+            continue
+        years = sorted(
+            y
+            for y in set(center) & set(lower) & set(upper) & set(global_baseline)
+            if settings.plot_start <= y <= settings.plot_end
+        )
+        if not years:
+            continue
+        center_vals = [center[y] - global_baseline[y] for y in years]
+        lower_vals = [lower[y] - global_baseline[y] for y in years]
+        upper_vals = [upper[y] - global_baseline[y] for y in years]
+        color = f"C{idx % 10}"
+        ax.plot(years, center_vals, label=mix, color=color, linewidth=2)
+        ax.fill_between(years, lower_vals, upper_vals, color=color, alpha=0.15)
+        plotted = True
+
+    if not plotted:
+        plt.close(fig)
+        return
+
+    ax.axhline(0, color="k", linestyle="--", linewidth=1, alpha=0.7)
+    ax.set_title("Emission Difference vs Global Baseline — All Countries")
+    ax.set_xlabel("Year")
+    ax.set_ylabel(f"Δ Mt CO₂/year (vs {baseline_mix} {BASE_DEMAND_CASE})")
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(
+        output_dir / f"emission_difference_vs_global_baseline_all_mix.{settings.plot_format}",
+        format=settings.plot_format,
+    )
+    plt.close(fig)
+
+
 def _plot_absolute_emissions_bars(
     mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
     settings: SummarySettings,
@@ -2218,7 +2295,7 @@ def _plot_absolute_emissions_country_tiles(
     for ax in axes_flat[len(countries) :]:
         ax.axis("off")
 
-    fig.supxlabel("Year")
+    #fig.supxlabel("Year")
     fig.supylabel("Mt CO₂/year")
     fig.suptitle("Absolute Emissions by Country and Energy Mix", fontsize=12)
     preferred_order = ["base_mix", "WEM", "WAM"]
@@ -2249,7 +2326,7 @@ def _plot_absolute_emissions_country_tiles(
             ncol=min(len(preferred_order), 3),
             bbox_to_anchor=(0.5, 0),
         )
-    #fig.tight_layout(rect=(0, 0.08, 1, 0.98))
+    fig.tight_layout(rect=(0, 0.1, 1, 0.98))
     fig.savefig(
         output_dir / f"absolute_emissions_country_tiles.{settings.plot_format}",
         format=settings.plot_format,
@@ -2562,6 +2639,11 @@ def write_plots(
         output_dir,
     )
     _plot_emission_difference_vs_base(
+        mix_absolute_emission,
+        settings,
+        output_dir,
+    )
+    _plot_emission_difference_vs_global_baseline(
         mix_absolute_emission,
         settings,
         output_dir,
