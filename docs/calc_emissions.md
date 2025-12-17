@@ -3,8 +3,10 @@
 The `calc_emissions` package converts electricity demand trajectories and
 generation mix assumptions into pollutant emission time series expressed in
 megatonnes (Mt) per year. Each country has its own configuration in
-``data/calc_emissions/countries/``; utility scripts pick the appropriate YAML
-and write per-scenario CSVs consumed by downstream modules.
+``data/calc_emissions/configs/`` by default (configurable via
+`calc_emissions.countries.directory` in the repository `config.yaml`); utility
+scripts pick the appropriate YAML and write per-scenario CSVs consumed by
+downstream modules.
 
 ## Workflow Overview
 
@@ -21,7 +23,7 @@ and write per-scenario CSVs consumed by downstream modules.
    entries. Emission deltas are computed relative to the baseline.
 6. **Outputs** – per-scenario CSV files (`co2.csv`, `so2.csv`, `nox.csv`,
    `pm25.csv`) under the configured `output_directory`. Each file contains
-   `year, delta` columns with deltas in Mt/year.
+   `year` plus `absolute_*` / `delta_*` columns (Mt/year).
 
 ## Core Equations
 
@@ -51,7 +53,7 @@ For technology i in year t:
 
 ## Configuration Keys
 
-### Per-country YAML (stored under ``data/calc_emissions/countries/``)
+### Per-country YAML (stored under ``data/calc_emissions/configs/`` by default)
 
 Each file (e.g. ``config_Albania.yaml``) wraps a full ``calc_emissions`` block:
 
@@ -66,10 +68,15 @@ Each file (e.g. ``config_Albania.yaml``) wraps a full ``calc_emissions`` block:
   across the country's scenarios.
 - ``baseline`` – references the demand/mix scenario used as the reference when
   calculating deltas.
-- ``baseline_mix_case`` / ``baseline_demand_case`` / ``delta_baseline_mode`` – set
-  ``delta_baseline_mode`` to ``global`` to subtract every scenario from the
-  single combination ``<baseline_mix_case>__<baseline_demand_case>``. The default
-  ``per_mix`` behaviour compares each mix to its own baseline demand.
+- ``baseline_mix_case`` / ``baseline_demand_case`` / ``delta_baseline_mode`` – controls
+  which baseline is used when computing `delta_*` columns:
+  - ``per_mix``: each mix is differenced against its own ``<mix>__<baseline_demand_case>``.
+  - ``global``: every scenario is differenced against the single combination
+    ``<baseline_mix_case>__<baseline_demand_case>``.
+
+  The library default is ``per_mix``; this repository’s `config.yaml` sets
+  `calc_emissions.countries.delta_baseline_mode: global` so runs are comparable
+  across mixes by default.
 - ``demand_scenarios`` / ``mix_scenarios`` – mappings that define the demand
   cases and mix cases to combine. Every mix is paired with every demand case, and
   scenario identifiers follow `<mix>__<demand>` (for example `base_mix__scen1_lower`).
@@ -79,15 +86,14 @@ Each file (e.g. ``config_Albania.yaml``) wraps a full ``calc_emissions`` block:
 
 ## Outputs
 
-- Per-country runs now write outputs to `results/emissions/<mix>/<Country>/`.
+- Per-country runs now write outputs to `results/<run>/emissions/<mix>/<Country>/` when a run
+  directory is configured (see `docs/scripts.md` for how `<run>` is resolved).
   Each CSV contains `year`, `absolute_<demand>`, and `delta_<demand>` columns for every configured
   demand case (e.g. `absolute_base_demand`, `absolute_scen1_lower`). Deltas are computed relative to
-  the mix-specific base demand case. The project also keeps an archive-style copy under the
-  configured results directory when `aggregate_results_directory` is set (for example
-  `results/emissions/<Country>/<mix>/`).
-- Aggregated multi-country deltas are written to `results/emissions/All_countries/<mix>/`.
-- Individual mix folders under `results/emissions/` contain subfolders for every country so
-  climate module can discover `co2.csv` without further configuration.
+  the baseline defined by `delta_baseline_mode` (see above).
+- Aggregated multi-country emissions are written to `results/<run>/emissions/All_countries/<mix>/`.
+- Individual mix folders under `results/<run>/emissions/` contain subfolders for every country so
+  downstream modules can discover `co2.csv` without further configuration.
 
 ### Repository-level metadata (``config.yaml``)
 
@@ -119,10 +125,10 @@ country configs.
 
 ### Testing
 
-- A unit test `tests/test_run_calc_emissions_all.py` verifies that the per-country CSV writer produces `year,delta` CSVs with the expected values. Run tests with:
+- `tests/test_run_calc_emissions_all.py` verifies that the per-country CSV writer produces
+  `year` plus `absolute_*` / `delta_*` columns with the expected values. Run tests with:
 
 ```bash
-conda activate TRA420
 pytest -q tests/test_run_calc_emissions_all.py
 ```
 

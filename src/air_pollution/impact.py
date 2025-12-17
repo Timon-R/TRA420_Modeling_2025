@@ -103,12 +103,41 @@ def run_from_config(
     config_root = get_config_root(full_config, config_path.parent)
 
     calc_cfg = full_config.get("calc_emissions", {}) if isinstance(full_config, Mapping) else {}
-    baseline_demand_case = str(
-        (calc_cfg or {}).get("baseline_demand_case", BASE_DEMAND_CASE)
-    ).strip() or BASE_DEMAND_CASE
-    baseline_mix_case = str((calc_cfg or {}).get("baseline_mix_case", BASE_MIX_CASE)).strip() or BASE_MIX_CASE
+    module_cfg_map: Mapping[str, object] = calc_cfg if isinstance(calc_cfg, Mapping) else {}
+    countries_cfg: Mapping[str, object] = {}
+    if module_cfg_map:
+        raw_countries_cfg = module_cfg_map.get("countries")
+        if isinstance(raw_countries_cfg, Mapping):
+            countries_cfg = raw_countries_cfg
+
+    baseline_demand_case = (
+        str(
+            countries_cfg.get(
+                "baseline_demand_case",
+                module_cfg_map.get("baseline_demand_case", BASE_DEMAND_CASE),
+            )
+        ).strip()
+        or BASE_DEMAND_CASE
+    )
+    baseline_mix_case = (
+        str(
+            countries_cfg.get(
+                "baseline_mix_case",
+                module_cfg_map.get("baseline_mix_case", BASE_MIX_CASE),
+            )
+        ).strip()
+        or BASE_MIX_CASE
+    )
     delta_baseline_mode = (
-        str((calc_cfg or {}).get("delta_baseline_mode", "per_mix")).strip().lower() or "per_mix"
+        str(
+            countries_cfg.get(
+                "delta_baseline_mode",
+                module_cfg_map.get("delta_baseline_mode", "per_mix"),
+            )
+        )
+        .strip()
+        .lower()
+        or "per_mix"
     )
 
     module_cfg = full_config.get("air_pollution")

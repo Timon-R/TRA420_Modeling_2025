@@ -38,6 +38,7 @@ class SummarySettings:
     output_directory: Path
     include_plots: bool = True
     plot_format: str = "png"
+    baseline_mix_case: str = BASE_MIX_CASE
     year_periods: list[tuple[int, int]] = field(default_factory=list)
     aggregation_mode: str = "per_year"
     aggregation_horizon: tuple[int, int] | None = None
@@ -914,6 +915,9 @@ def build_summary(
     baseline_case = (
         str(countries_cfg.get("baseline_demand_case", BASE_DEMAND_CASE)).strip() or BASE_DEMAND_CASE
     )
+    baseline_mix_case = (
+        str(countries_cfg.get("baseline_mix_case", BASE_MIX_CASE)).strip() or BASE_MIX_CASE
+    )
 
     summary_cfg = (
         config.get("results", {}).get("summary", {})
@@ -1292,6 +1296,7 @@ def build_summary(
         output_directory=output_directory,
         include_plots=include_plots,
         plot_format=plot_format,
+        baseline_mix_case=baseline_mix_case,
         aggregation_mode=aggregation_mode,
         aggregation_horizon=aggregation_horizon,
         plot_start=plot_start,
@@ -2072,6 +2077,83 @@ def _plot_emission_difference_vs_global_baseline(
     plt.close(fig)
 
 
+def _plot_metric_all_mix(
+    mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
+    settings: SummarySettings,
+    output_dir: Path,
+    *,
+    title: str,
+    ylabel: str,
+    file_stem: str,
+) -> None:
+    """Plot a single timeseries chart overlaying all mixes (with uncertainty envelopes)."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("matplotlib not available; skipping %s plot", file_stem)
+        return
+
+    if not mix_data:
+        return
+
+    preferred_order = ["base_mix", "WEM", "WAM"]
+
+    def _mix_sort_key(mix: str) -> tuple[int, str]:
+        try:
+            return (preferred_order.index(mix), mix)
+        except ValueError:
+            return (len(preferred_order), mix)
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    plotted = False
+
+    for idx, mix in enumerate(sorted(mix_data, key=_mix_sort_key)):
+        climates = mix_data.get(mix, {})
+        if not climates:
+            continue
+        demand_map = climates.get("all") or next(iter(climates.values()), None)
+        if not demand_map:
+            continue
+        lower = demand_map.get("scen1_lower")
+        upper = demand_map.get("scen1_upper")
+        center = demand_map.get("scen1_mean") or demand_map.get(BASE_DEMAND_CASE)
+        if center is None and lower and upper:
+            center = {
+                year: (lower_val + upper[year]) / 2.0
+                for year, lower_val in lower.items()
+                if year in upper
+            }
+        if center is None or lower is None or upper is None:
+            continue
+        years = sorted(
+            y
+            for y in set(center) & set(lower) & set(upper)
+            if settings.plot_start <= y <= settings.plot_end
+        )
+        if not years:
+            continue
+        center_vals = [center[y] for y in years]
+        lower_vals = [lower[y] for y in years]
+        upper_vals = [upper[y] for y in years]
+        color = f"C{idx % 10}"
+        ax.plot(years, center_vals, label=mix, color=color, linewidth=2)
+        ax.fill_between(years, lower_vals, upper_vals, color=color, alpha=0.15)
+        plotted = True
+
+    if not plotted:
+        plt.close(fig)
+        return
+
+    ax.set_title(title)
+    ax.set_xlabel("Year")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_dir / f"{file_stem}.{settings.plot_format}", format=settings.plot_format)
+    plt.close(fig)
+
+
 def _plot_absolute_emissions_bars(
     mix_data: Mapping[str, Mapping[str, Mapping[str, Mapping[int, float]]]],
     settings: SummarySettings,
@@ -2625,6 +2707,23 @@ def write_plots(
     mix_mortality_value = _collect_by_mix("mortality_value_delta")
     mix_damages = _collect_by_mix("damages_usd", method="ramsey_discount")
 
+    _plot_metric_all_mix(
+        mix_mortality,
+        settings,
+        output_dir,
+        title="Mortality Delta — All Mixes",
+        ylabel="deaths/year",
+        file_stem="mortality_delta_all_mix",
+    )
+    _plot_metric_all_mix(
+        mix_mortality_value,
+        settings,
+        output_dir,
+        title="Mortality Value Delta — All Mixes",
+        ylabel="USD/year",
+        file_stem="mortality_value_all_mix",
+    )
+
     _plot_lines_for_mix(
         mix_emission,
         "emission_delta",
@@ -2647,6 +2746,7 @@ def write_plots(
         mix_absolute_emission,
         settings,
         output_dir,
+        baseline_mix=settings.baseline_mix_case,
     )
     _plot_absolute_emissions_bars(
         mix_absolute_emission,
