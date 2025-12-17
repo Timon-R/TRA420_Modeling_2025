@@ -26,6 +26,7 @@ import yaml
 
 from calc_emissions import (
     BASE_DEMAND_CASE,
+    BASE_MIX_CASE,
     EmissionScenarioResult,
     run_from_config as run_emissions,
 )
@@ -101,6 +102,44 @@ def run_from_config(
 
     config_root = get_config_root(full_config, config_path.parent)
 
+    calc_cfg = full_config.get("calc_emissions", {}) if isinstance(full_config, Mapping) else {}
+    module_cfg_map: Mapping[str, object] = calc_cfg if isinstance(calc_cfg, Mapping) else {}
+    countries_cfg: Mapping[str, object] = {}
+    if module_cfg_map:
+        raw_countries_cfg = module_cfg_map.get("countries")
+        if isinstance(raw_countries_cfg, Mapping):
+            countries_cfg = raw_countries_cfg
+
+    baseline_demand_case = (
+        str(
+            countries_cfg.get(
+                "baseline_demand_case",
+                module_cfg_map.get("baseline_demand_case", BASE_DEMAND_CASE),
+            )
+        ).strip()
+        or BASE_DEMAND_CASE
+    )
+    baseline_mix_case = (
+        str(
+            countries_cfg.get(
+                "baseline_mix_case",
+                module_cfg_map.get("baseline_mix_case", BASE_MIX_CASE),
+            )
+        ).strip()
+        or BASE_MIX_CASE
+    )
+    delta_baseline_mode = (
+        str(
+            countries_cfg.get(
+                "delta_baseline_mode",
+                module_cfg_map.get("delta_baseline_mode", "per_mix"),
+            )
+        )
+        .strip()
+        .lower()
+        or "per_mix"
+    )
+
     module_cfg = full_config.get("air_pollution")
     if not module_cfg:
         raise ValueError("'air_pollution' section missing from config.yaml")
@@ -140,21 +179,32 @@ def run_from_config(
     baseline_by_mix = {
         res.mix_case: res
         for res in emission_results.values()
-        if res.demand_case == BASE_DEMAND_CASE
+        if res.demand_case == baseline_demand_case
     }
+    baseline_global = baseline_by_mix.get(baseline_mix_case)
     if not baseline_by_mix:
-        raise ValueError(f"calc_emissions results must include '{BASE_DEMAND_CASE}' demand cases.")
+        raise ValueError(
+            f"calc_emissions results must include '{baseline_demand_case}' demand cases."
+        )
+    if delta_baseline_mode == "global" and baseline_global is None:
+        raise ValueError(
+            f"calc_emissions results must include '{baseline_mix_case}__{baseline_demand_case}' "
+            "when delta_baseline_mode is 'global'."
+        )
     pollutant_cfg = module_cfg.get("pollutants", {})
     pollutants = set(pollutant_cfg) if pollutant_cfg else set(DEFAULT_POLLUTANT_FILES)
 
     results: dict[str, AirPollutionResult] = {}
 
     for scenario_name, scenario_result in emission_results.items():
-        if scenario_result.demand_case == BASE_DEMAND_CASE:
+        if scenario_result.demand_case == baseline_demand_case:
             continue
         if selection and scenario_name not in selection:
             continue
-        baseline = baseline_by_mix.get(scenario_result.mix_case)
+        if delta_baseline_mode == "global":
+            baseline = baseline_global
+        else:
+            baseline = baseline_by_mix.get(scenario_result.mix_case)
         if baseline is None:
             continue
 
@@ -194,7 +244,10 @@ def run_from_config(
 
             beta = _derive_beta(cfg, pollutant)
             emission_ratio = _compute_emission_ratio(scenario_series, baseline_series)
-            impacts = _build_impacts(concentrations, emission_ratio, beta, electricity_share_series)
+            delta_fraction = _compute_delta_fraction(scenario_series, baseline_series)
+            impacts = _build_impacts(
+                concentrations, emission_ratio, delta_fraction, beta, electricity_share_series
+            )
 
             if impacts.empty:
                 continue
@@ -522,15 +575,39 @@ def _compute_emission_ratio(
     return ratio
 
 
+def _compute_delta_fraction(
+    scenario_series: pd.Series,
+    baseline_series: pd.Series,
+) -> pd.Series:
+    """Return (scenario - baseline) / baseline with safeguards for zeros."""
+
+    aligned = pd.concat([scenario_series, baseline_series], axis=1, keys=["scenario", "baseline"])
+    aligned = aligned.sort_index()
+    scen = aligned["scenario"]
+    base = aligned["baseline"]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac = (scen - base) / base.replace(0.0, np.nan)
+    # If both scenario and baseline are zero, treat the change as zero.
+    zero_both = (scen == 0.0) & (base == 0.0)
+    frac.loc[zero_both] = 0.0
+    # If scenario is zero but baseline is positive, cap at -1 (a 100% reduction).
+    zero_scen = (scen == 0.0) & (base > 0.0)
+    frac.loc[zero_scen] = -1.0
+    frac.name = "delta_fraction"
+    return frac.astype(float)
+
+
 def _build_impacts(
     concentrations: pd.Series,
     emission_ratio: pd.Series,
+    delta_fraction: pd.Series,
     beta: float,
     electricity_share: pd.Series,
 ) -> pd.DataFrame:
     records = []
     for year, ratio in emission_ratio.items():
-        if pd.isna(ratio):
+        delta_frac = delta_fraction.get(year, math.nan)
+        if pd.isna(ratio) or pd.isna(delta_frac):
             for country, baseline_conc in concentrations.items():
                 records.append(
                     {
@@ -538,6 +615,7 @@ def _build_impacts(
                         "year": int(year),
                         "baseline_concentration": baseline_conc,
                         "emission_ratio": np.nan,
+                        "delta_fraction": np.nan,
                         "new_concentration": np.nan,
                         "delta_concentration": np.nan,
                         "percent_change_mortality": np.nan,
@@ -545,7 +623,7 @@ def _build_impacts(
                 )
             continue
 
-        multiplier = float(ratio)
+        multiplier = float(delta_frac)
         for country, baseline_conc in concentrations.items():
             share_value = electricity_share.get(country, math.nan)
             if pd.isna(share_value):
@@ -553,15 +631,16 @@ def _build_impacts(
                     float(electricity_share.mean()) if not electricity_share.empty else 0.0
                 )
             share = max(0.0, min(float(share_value), 1.0))
-            new_conc = baseline_conc * (1.0 + share * (multiplier - 1.0))
-            delta_conc = new_conc - baseline_conc
+            delta_conc = baseline_conc * share * multiplier
+            new_conc = baseline_conc + delta_conc
             perc_change = math.exp(beta * delta_conc) - 1.0
             records.append(
                 {
                     "country": country,
                     "year": int(year),
                     "baseline_concentration": baseline_conc,
-                    "emission_ratio": multiplier,
+                    "emission_ratio": float(ratio),
+                    "delta_fraction": multiplier,
                     "new_concentration": new_conc,
                     "delta_concentration": delta_conc,
                     "percent_change_mortality": perc_change,

@@ -59,7 +59,7 @@ $$
 r_{p,t} = \frac{E^{\text{scenario}}_{p,t}}{E^{\text{baseline}}_{p,t}}
 $$
 
-- **Concentration change with electricity share \(s_{c,p}\)**  
+- **Concentration change with electricity share $s_{c,p}$**  
   Baseline concentrations stay at their full observed values, while only the
   electricity-attributable share is scaled by the emission ratio:
 
@@ -72,7 +72,7 @@ $$
 $$
 
 - **Relative-risk slope**  
-  With relative risk `RR` specified for a reference delta `Δ_ref`, the slope is
+  With relative risk $RR$ specified for a reference delta $\Delta_{ref}$, the slope is
 
 $$
 \beta_p = \frac{\ln(\text{RR}_p)}{\Delta_{\text{ref}, p}}
@@ -99,7 +99,7 @@ $$
 $$
 
 - **Combined mortality (across pollutants)**  
-  Per-year combined mortality uses normalised pollutant weights `w_p` (default
+  Per-year combined mortality uses normalised pollutant weights $w_p$ (default
   equal) applied to the weighted percentage changes, multiplied by the
   module-level baseline deaths:
 
@@ -113,7 +113,7 @@ $$
 
 - Emissions from `calc_emissions` are in megatonnes (Mt) per year. Only ratios
   are used here, so absolute unit scaling cancels out.
-- Concentrations are in µg/m³. The RR slope `β` is in (per µg/m³) units.
+- Concentrations are in µg/m³. The RR slope $\beta$ is in m³/µg units.
 - Mortality percentage changes are unitless; mortality deltas (deaths/year)
   adopt the baseline deaths’ units and cadence.
 
@@ -173,6 +173,10 @@ air_pollution:
   number of years in the period.
 - `scenarios`: accepts `all`, a single name, or a list; the baseline scenario is
   always required in the emissions results but is not processed as an output.
+- Baseline emissions used for emission ratios follow the same baseline mode as
+  `calc_emissions`: when `delta_baseline_mode: global`, every scenario is
+  compared to `baseline_mix_case__baseline_demand_case`; otherwise each mix is
+  compared to its own `base_demand` baseline.
 
 ### Country and Scenario Selection
 

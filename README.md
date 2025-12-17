@@ -19,7 +19,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
   The canonical Excel workbooks for electricity mixes and technology intensities
   (`Electricity_OECD.xlsx`, `Emission_factors_all.xlsx`) now live under
   `data/calc_emissions/`.
-- `results/` — generated outputs. Emissions live under `results/<run>/emissions/<mix>/<Country>/` (per-country) plus `results/<run>/emissions/All_countries/<mix>/`. All downstream modules reuse the same `<run>` prefix so each experiment (set via `run.output_subdir`) keeps its own climate, air-pollution, economic, and summary folders.
+- `results/` — generated outputs. Emissions live under `results/<run>/emissions/<mix>/<Country>/` (per-country) plus `results/<run>/emissions/All_countries/<mix>/`. All downstream modules reuse the same `<run>` prefix so each experiment (set via `run.output_subdir`, or overridden by `results.run_directory`) keeps its own climate, air-pollution, economic, and summary folders.
 - `tests/` — pytest suite covering emissions, climate, economic, and local climate-impact modules.
 - `config.yaml` — project-level configuration (scenario metadata, default parameters).
 - `environment.yaml` — preferred Python environment specification for reproducibility.
@@ -33,11 +33,10 @@ temperature responses, and evaluating local/global impact metrics such as the So
 1. **Create the environment**
 
    ```bash
-   mamba env create -f environment.yaml  # or `conda` / `uv` once finalized
+   conda env create -f environment.yaml  # or using mamba or pip
    conda activate tra420-modeling
    ```
-
-1. **Install the project in editable mode** (once package metadata is finalized):
+2. **Install the project in editable mode** (once package metadata is finalized):
 
    ```bash
    pip install -e .
@@ -47,7 +46,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
 
 ### Electricity emissions per country
 
-Run the calculator for one country (writes per-country deltas under `results/<run>/emissions/<mix>/<Country>/`). Country names correspond to `config_<name>.yaml` files in `data/calc_emissions/countries/`:
+Run the calculator for one country (writes per-country deltas under `results/<run>/emissions/<mix>/<Country>/`). Country names correspond to `config_<name>.yaml` files in the directory configured by `calc_emissions.countries.directory` (default `data/calc_emissions/configs/`):
 
 ```bash
 python scripts/run_calc_emissions.py --country Albania
@@ -125,6 +124,7 @@ Plots live in `results/<run>/summary/plots/`. Mix-specific folders contain emiss
 
 - Set `run.output_subdir` in `config.yaml` (or pass `--run-subdir <name>` to
   `scripts/run_full_pipeline.py`) to keep outputs under `results/<name>/…`.
+- `results.run_directory` takes precedence over `run.output_subdir` and is useful as an explicit override (for example when post-processing a prior run). The summary generator also supports `PYTHONPATH=src python scripts/generate_summary.py --run-directory <name>`.
 - For batch experiments set `run.mode: scenarios` and point
   `run.scenario_file` to a YAML mapping scenario names to overrides. Each entry
   can tweak any part of the base config; the pipeline deep-merges the overrides,

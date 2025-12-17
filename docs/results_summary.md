@@ -42,9 +42,15 @@ Run the generator after your pipeline steps have produced outputs:
 PYTHONPATH=src python scripts/generate_summary.py
 ```
 
-If you configure `results.run_directory`, every module (including the summary)
-will write to `results/<run_directory>/…`, keeping multi-module runs aligned while
-avoiding overwrites between experiments.
+To target a specific run directory without editing `config.yaml`:
+
+```bash
+PYTHONPATH=src python scripts/generate_summary.py --run-directory global
+```
+
+Run directories are resolved as `results.run_directory` (if set) and otherwise
+fall back to `run.output_subdir`, so the summary stays aligned with end-to-end
+runs executed via `scripts/run_full_pipeline.py`.
 
 It discovers economic results in `results/economic/`, climate CSVs in
 `results/climate/`, emissions in `results/emissions/All_countries/<mix>/`, and
@@ -83,6 +89,16 @@ air‑pollution summaries in `results/air_pollution/<scenario>/` (all adjusted f
 - `plots/` — contains:
   - `scc_timeseries.png` (SCC vs time for each SSP).
   - Background climate and socioeconomics panels.
+  - Cross-mix emissions plots (written in the top-level `plots/` folder):
+    - `absolute_emissions_all_mix.<ext>` — absolute emissions over time for each mix (with uncertainty envelope).
+    - `emission_difference_vs_base_all_mix.<ext>` — absolute emissions relative to each mix’s `base_demand` trajectory.
+    - `emission_difference_vs_global_baseline_all_mix.<ext>` — absolute emissions relative to the global baseline mix
+      (defaults to `calc_emissions.countries.baseline_mix_case`, compared against `base_demand`).
+    - `absolute_emissions_bar.<ext>` — bar chart snapshot of absolute emissions at selected years.
+    - `absolute_emissions_country_tiles.<ext>` — small-multiples grid of absolute emissions by country and mix.
+  - Cross-mix air-pollution plots (written in the top-level `plots/` folder):
+    - `mortality_delta_all_mix.<ext>` — mortality delta timeseries for all mixes on one axis (with uncertainty envelope).
+    - `mortality_value_all_mix.<ext>` — monetised mortality value delta timeseries for all mixes on one axis (with uncertainty envelope).
   - One folder per mix containing emissions, mortality, concentration, and damage plots across the full horizon (annual resolution from the configured time grid) with shaded envelopes for `scen1_lower`/`scen1_upper`.
 - SCC results are sourced from the SSP-level `results/economic/pulse_scc_timeseries_<method>_<ssp>.csv`
   files written by `scripts/run_scc.py`; each row combines the SCC(τ) timeseries and the aggregated SCC value for that climate pathway.

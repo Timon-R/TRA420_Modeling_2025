@@ -9,13 +9,14 @@ python scripts/run_air_pollution.py
 The script expects ``calc_emissions`` to be configured in ``config.yaml`` and
 uses its output directly. Configuration for this module lives in the
 ``air_pollution`` section of the same file. Results are written to
-``results/air_pollution/<scenario>/<pollutant>_health_impact.csv`` with the
+``results/<run>/air_pollution/<scenario>/<pollutant>_health_impact.csv`` with the
 following columns:
 
 - ``country`` – country name from the concentration statistics file.
 - ``year`` – calendar year.
 - ``baseline_concentration`` – reference concentration (µg/m³).
 - ``emission_ratio`` – scenario emissions divided by baseline emissions.
+- ``delta_fraction`` – fractional emission change vs baseline (scenario-baseline)/baseline.
 - ``new_concentration`` – estimated concentration under the scenario (µg/m³).
 - ``delta_concentration`` – change vs. baseline (µg/m³).
 - ``percent_change_mortality`` – mortality percentage difference (unitless).

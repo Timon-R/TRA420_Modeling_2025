@@ -96,6 +96,7 @@ def test_air_pollution_run_from_config_creates_outputs(tmp_path: Path):
         "year",
         "baseline_concentration",
         "emission_ratio",
+        "delta_fraction",
         "new_concentration",
         "delta_concentration",
         "percent_change_mortality",

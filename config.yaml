@@ -1,6 +1,6 @@
 run:
   mode: normal  # 'normal' runs once; set to 'scenarios' to iterate over entries in run.scenario_file.
-  output_subdir: local   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
+  output_subdir: global   # Optional subfolder under results/ for named runs (can also be passed via --run-subdir).
   scenario_file: scenarios.yaml  # YAML mapping scenario names → overrides when mode == 'scenarios'.
 
 time_horizon:

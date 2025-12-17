@@ -73,10 +73,20 @@ def main() -> None:
 
     write_plots(settings, methods, metrics_map)
     if settings.include_plots:
+        global_plot = (
+            settings.output_directory
+            / "plots"
+            / f"emission_difference_vs_global_baseline_all_mix.{settings.plot_format}"
+        )
         logger.info(
             "Plots written under %s",
             (settings.output_directory / "plots").relative_to(ROOT),
         )
+        if global_plot.exists():
+            logger.info(
+                "Global-baseline emission plot written to %s",
+                global_plot.relative_to(ROOT),
+            )
 
 
 if __name__ == "__main__":

@@ -175,16 +175,31 @@ def run_from_config(
         if missing:
             raise KeyError(f"Mix scenarios missing required cases: {missing}")
         mix_scenarios = {case: mix_scenarios[case] for case in allowed}
-    baseline_mix = (
-        str(baseline_mix_case or module_cfg.get("baseline_mix_case", BASE_MIX_CASE)).strip()
-        or BASE_MIX_CASE
-    )
+    raw_baseline_mix = baseline_mix_case if baseline_mix_case is not None else module_cfg.get("baseline_mix_case")
+    baseline_mix = str(raw_baseline_mix).strip() if raw_baseline_mix is not None else ""
+    if not baseline_mix:
+        baseline_mix = BASE_MIX_CASE
+
     if baseline_mix not in mix_scenarios:
-        available = ", ".join(sorted(mix_scenarios)) or "<none>"
-        raise ValueError(
-            f"Baseline mix '{baseline_mix}' is not defined in mix_scenarios. "
-            f"Available mixes: {available}. Update calc_emissions.baseline_mix_case or mix_scenarios."
-        )
+        # If an explicit baseline mix was provided, fail loudly.
+        if raw_baseline_mix is not None:
+            available = ", ".join(sorted(mix_scenarios)) or "<none>"
+            raise ValueError(
+                f"Baseline mix '{baseline_mix}' is not defined in mix_scenarios. "
+                f"Available mixes: {available}. Update calc_emissions.baseline_mix_case or mix_scenarios."
+            )
+
+        # Otherwise, fall back to common synthetic/default cases.
+        if "baseline_mix" in mix_scenarios:
+            baseline_mix = "baseline_mix"
+        elif len(mix_scenarios) == 1:
+            baseline_mix = next(iter(mix_scenarios))
+        else:
+            available = ", ".join(sorted(mix_scenarios)) or "<none>"
+            raise ValueError(
+                f"Baseline mix '{baseline_mix}' is not defined in mix_scenarios. "
+                f"Available mixes: {available}. Set calc_emissions.baseline_mix_case explicitly."
+            )
 
     results: dict[str, EmissionScenarioResult] = {}
     per_mix_results: dict[str, dict[str, EmissionScenarioResult]] = {}
