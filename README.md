@@ -33,7 +33,7 @@ temperature responses, and evaluating local/global impact metrics such as the So
 1. **Create the environment**
 
    ```bash
-   conda env create -f environment.yaml  # or using mambda or pip
+   conda env create -f environment.yaml  # or using mamba or pip
    conda activate tra420-modeling
    ```
 2. **Install the project in editable mode** (once package metadata is finalized):

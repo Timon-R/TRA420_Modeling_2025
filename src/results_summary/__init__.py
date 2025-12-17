@@ -2314,7 +2314,7 @@ def _plot_absolute_emissions_country_tiles(
         figsize=(ncols * 4.2, nrows * 3.2),
         sharex=True,
         sharey=False,
-        layout = "constrained"
+        layout="constrained"
     )
     axes_flat = np.atleast_1d(axes).ravel()
     legend_handles: dict[str, object] = {}
@@ -2377,7 +2377,6 @@ def _plot_absolute_emissions_country_tiles(
     for ax in axes_flat[len(countries) :]:
         ax.axis("off")
 
-    #fig.supxlabel("Year")
     fig.supylabel("Mt CO₂/year")
     fig.suptitle("Absolute Emissions by Country and Energy Mix", fontsize=12)
     preferred_order = ["base_mix", "WEM", "WAM"]
